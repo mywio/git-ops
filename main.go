@@ -193,6 +193,11 @@ func deployRepo(ctx context.Context, client *github.Client, fullName string, rep
 		return
 	}
 
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		logger.Error("Failed to write docker-compose.yml", "error", err)
+		return
+	}
+
 	// Fetch Repo Hooks (Pre & Post)
 	// We fetch them now so they are ready to run locally
 	err = fetchRepoHooks(ctx, client, *repo.Owner.Login, *repo.Name, "pre", repoLocalPath, logger)
