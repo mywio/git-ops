@@ -1,4 +1,4 @@
-module deployer
+module github.com/mywio/GHOps
 
 go 1.24.0
 
