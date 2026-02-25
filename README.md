@@ -2,12 +2,27 @@
 
 GHOps is a lightweight, "GitOps-lite" operator written in Go. It automatically discovers, syncs, and deploys Docker Compose stacks from your GitHub repositories based on Topics.
 
-## How it Works
-1.  **Scan:** Periodically queries GitHub for repositories matching a specific User and Topic (e.g., `topic:homelab-node-1`).
-2.  **Reconcile:**
-    * **New/Updated:** Downloads `docker-compose.yml` and hook scripts, then runs `docker compose up -d`.
-    * **Removed/Archived:** Detects if a repo no longer matches the criteria and runs `docker compose down` + deletes the local folder.
-3.  **Hooks:** Executes shell scripts before and after deployment for migrations, secrets, or notifications.
+## Features
+- **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
+- **GitOps Lite**: Syncs `docker-compose.yml` from GitHub based on Topics.
+- **Hook System**: Run scripts before/after deployment.
+
+## Installation
+
+### Prerequisites
+- Go 1.24+
+- Docker & Docker Compose
+
+### Build
+```bash
+# Build the core binary
+make build
+
+# Build plugins
+make plugins
+```
+
+The binary will be in `bin/ghops` and plugins in `bin/plugins/`.
 
 ## Configuration (Env Vars)
 
@@ -20,6 +35,25 @@ GHOps is a lightweight, "GitOps-lite" operator written in Go. It automatically d
 | `GLOBAL_HOOKS_DIR`| Path to server-wide hooks | No | `/etc/ghops/hooks` |
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
 | `DRY_RUN` | Log only, no changes | No | `false` |
+| `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
+
+## Plugins
+GHOps supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
+
+Available plugins:
+- **Google Secret Manager**: Injects secrets from GSM into deployments.
+- **MCP**: AI Context integration (Model Context Protocol).
+- **UI**: Web Dashboard.
+- **Notifications**: Pushover/Webhook alerts.
+
+See [docs/plugins/](docs/plugins/) for more details.
+
+## How it Works
+1.  **Scan:** Periodically queries GitHub for repositories matching a specific User and Topic (e.g., `topic:homelab-node-1`).
+2.  **Reconcile:**
+    * **New/Updated:** Downloads `docker-compose.yml` and hook scripts, then runs `docker compose up -d`.
+    * **Removed/Archived:** Detects if a repo no longer matches the criteria and runs `docker compose down` + deletes the local folder.
+3.  **Hooks:** Executes shell scripts before and after deployment for migrations, secrets, or notifications.
 
 ## Directory Structure
 

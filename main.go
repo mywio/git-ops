@@ -28,6 +28,15 @@ func main() {
 	// 4. Setup Module Manager
 	mgr := core.NewModuleManager(logger)
 
+	// Load Plugins
+	pluginsDir := os.Getenv("PLUGINS_DIR")
+	if pluginsDir == "" {
+		pluginsDir = "plugins"
+	}
+	if err := mgr.LoadPlugins(pluginsDir); err != nil {
+		logger.Error("Failed to load plugins", "error", err)
+	}
+
 	// 5. Register Modules
 	// Core Reconciler
 	r := reconciler.NewReconciler(cfg)
