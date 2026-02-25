@@ -19,7 +19,10 @@ func TestMCPPlugin(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 
-	err := Plugin.Init(ctx, logger)
+	// Use ModuleManager as a dummy registry
+	mgr := core.NewModuleManager(logger)
+
+	err := Plugin.Init(ctx, logger, mgr)
 	assert.NoError(t, err)
 
 	err = Plugin.Start(ctx)

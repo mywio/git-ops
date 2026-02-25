@@ -17,7 +17,11 @@ func (p *UIPlugin) Name() string {
 	return "ui"
 }
 
-func (p *UIPlugin) Init(ctx context.Context, logger *slog.Logger) error {
+func (p *UIPlugin) Description() string {
+	return "Web Dashboard UI"
+}
+
+func (p *UIPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
 	return nil
 }
@@ -37,4 +41,8 @@ func (p *UIPlugin) Capabilities() []core.Capability {
 
 func (p *UIPlugin) Status() core.ServiceStatus {
 	return core.StatusHealthy
+}
+
+func (p *UIPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+	return nil, nil
 }

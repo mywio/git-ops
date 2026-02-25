@@ -1,4 +1,4 @@
-package core_test
+package core
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mywio/GHOps/pkg/core"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,7 +18,7 @@ type MockModule struct {
 }
 
 func (m *MockModule) Name() string { return m.name }
-func (m *MockModule) Init(ctx context.Context, l *slog.Logger) error {
+func (m *MockModule) Init(ctx context.Context, l *slog.Logger, r PluginRegistry) error {
 	m.initCalled = true
 	return nil
 }
@@ -34,7 +33,7 @@ func (m *MockModule) Stop(ctx context.Context) error {
 
 func TestModuleManager(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	mgr := core.NewModuleManager(logger)
+	mgr := NewModuleManager(logger)
 
 	// Mock Module
 	mock := &MockModule{name: "mock"}

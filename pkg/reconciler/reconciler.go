@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/go-github/v57/github"
 	"github.com/mywio/GHOps/pkg/config"
+	"github.com/mywio/GHOps/pkg/core"
 	"github.com/mywio/GHOps/pkg/utils"
 	"golang.org/x/oauth2"
 )
@@ -21,6 +22,7 @@ type Reconciler struct {
 	cfg        config.Config
 	client     *github.Client
 	logger     *slog.Logger
+	registry   core.PluginRegistry
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
 	ticker     *time.Ticker
@@ -38,8 +40,9 @@ func (r *Reconciler) Name() string {
 	return "reconciler"
 }
 
-func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger) error {
+func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	r.logger = logger
+	r.registry = registry
 	if r.cfg.Token == "" {
 		return fmt.Errorf("missing GITHUB_TOKEN")
 	}
@@ -120,40 +123,77 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	// 1. Build Desired State (What should exist)
 	// Map Key: "Owner/RepoName"
 	desiredState := make(map[string]*github.Repository)
+	
+	// 2. Build Removal State (What should be explicitly removed)
+	removalState := make(map[string]bool)
 
 	for _, user := range r.cfg.Users {
 		if user == "" {
 			continue
 		}
 
-		// Query: user:NAME topic:TAG archived:false
-		query := fmt.Sprintf("user:%s topic:%s archived:false", user, r.cfg.Topic)
-		opts := &github.SearchOptions{ListOptions: github.ListOptions{PerPage: 100}}
+		// Query 1: Desired State (user:NAME topic:TAG archived:false)
+		queryDesired := fmt.Sprintf("user:%s topic:%s archived:false", user, r.cfg.Topic)
+		r.fetchReposInto(ctx, queryDesired, desiredState)
 
-		repos, _, err := r.client.Search.Repositories(ctx, query, opts)
-		if err != nil {
-			r.logger.Error("Search failed", "user", user, "error", err)
-			continue
-		}
+		// Query 2: Removal Candidates - Topic "ghops-remove"
+		queryRemoveTopic := fmt.Sprintf("user:%s topic:ghops-remove", user)
+		r.fetchRemovalInto(ctx, queryRemoveTopic, removalState)
 
-		for _, repo := range repos.Repositories {
-			fullName := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
-			desiredState[fullName] = repo
-		}
+		// Query 3: Removal Candidates - Archived but with main Topic
+		// Note: searching for archived:true explicitly
+		queryArchived := fmt.Sprintf("user:%s topic:%s archived:true", user, r.cfg.Topic)
+		r.fetchRemovalInto(ctx, queryArchived, removalState)
 	}
 
-	r.logger.Info("Desired state calculated", "count", len(desiredState))
+	r.logger.Info("State calculated", "desired", len(desiredState), "removal", len(removalState))
 
-	// 2. Prune Phase (Remove what shouldn't exist)
-	r.pruneLocal(desiredState)
+	// 3. Process Local State (The "Kill Switch" Logic)
+	r.processLocalState(desiredState, removalState)
 
-	// 3. Deploy Phase (Update/Create what should exist)
+	// 4. Deploy Phase (Update/Create what should exist)
 	for fullName, repo := range desiredState {
+		// If it's also in removal list (conflict), removal takes precedence?
+		// Logic: If it's in removal list, it should have been handled by processLocalState (deleted).
+		// But if it's in desiredState map, we might re-deploy it.
+		// GitHub search is eventually consistent.
+		// If a repo has both tags? User error.
+		// Let's assume Removal trumps Desired.
+		if removalState[fullName] {
+			r.logger.Warn("Repo found in both Desired and Removal state, skipping deploy", "repo", fullName)
+			continue
+		}
 		r.deployRepo(ctx, fullName, repo)
 	}
 }
 
-func (r *Reconciler) pruneLocal(desiredState map[string]*github.Repository) {
+func (r *Reconciler) fetchReposInto(ctx context.Context, query string, target map[string]*github.Repository) {
+	opts := &github.SearchOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	repos, _, err := r.client.Search.Repositories(ctx, query, opts)
+	if err != nil {
+		r.logger.Error("Search failed", "query", query, "error", err)
+		return
+	}
+	for _, repo := range repos.Repositories {
+		fullName := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
+		target[fullName] = repo
+	}
+}
+
+func (r *Reconciler) fetchRemovalInto(ctx context.Context, query string, target map[string]bool) {
+	opts := &github.SearchOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	repos, _, err := r.client.Search.Repositories(ctx, query, opts)
+	if err != nil {
+		r.logger.Error("Search failed", "query", query, "error", err)
+		return
+	}
+	for _, repo := range repos.Repositories {
+		fullName := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
+		target[fullName] = true
+	}
+}
+
+func (r *Reconciler) processLocalState(desiredState map[string]*github.Repository, removalState map[string]bool) {
 	// Walk TARGET_DIR/OWNER/REPO
 	entries, err := os.ReadDir(r.cfg.TargetDir)
 	if os.IsNotExist(err) {
@@ -173,24 +213,39 @@ func (r *Reconciler) pruneLocal(desiredState map[string]*github.Repository) {
 				continue
 			}
 
-			// Construct key "Owner/Repo" to match desiredState map
+			// Construct key "Owner/Repo"
 			currentKey := fmt.Sprintf("%s/%s", userDir.Name(), repoDir.Name())
 			fullPath := filepath.Join(userPath, repoDir.Name())
 
-			if _, exists := desiredState[currentKey]; !exists {
-				r.logger.Info("Pruning detected: Service no longer in desired state", "service", currentKey)
+			isDesired := desiredState[currentKey] != nil
+			isRemoval := removalState[currentKey]
 
-				if !r.cfg.DryRun {
-					// Docker Down
-					cmd := exec.Command("docker", "compose", "down", "--remove-orphans")
-					cmd.Dir = fullPath
-					cmd.Run() // Ignore error, maybe container is already gone
-
-					// Delete Folder
-					os.RemoveAll(fullPath)
-				}
+			if isRemoval {
+				r.logger.Info("Explicit removal detected", "service", currentKey)
+				r.pruneService(fullPath)
+			} else if !isDesired {
+				// Exists locally, but NOT in Desired, and NOT in Removal.
+				// This is the "Safety Warning" - Do NOT Delete.
+				r.logger.Warn("Sync Divergence: Local service exists but not found in Desired State. Skipping removal.", "service", currentKey)
 			}
 		}
+	}
+}
+
+func (r *Reconciler) pruneService(path string) {
+	if r.cfg.DryRun {
+		r.logger.Info("DryRun: Would remove service", "path", path)
+		return
+	}
+
+	// Docker Down
+	cmd := exec.Command("docker", "compose", "down", "--remove-orphans")
+	cmd.Dir = path
+	cmd.Run() // Ignore error
+
+	// Delete Folder
+	if err := os.RemoveAll(path); err != nil {
+		r.logger.Error("Failed to remove service folder", "path", path, "error", err)
 	}
 }
 
@@ -224,7 +279,17 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	// Change Detection
 	existing, _ := os.ReadFile(filePath)
 	if string(existing) == content {
-		return // No change
+		// Even if file didn't change, we might need to redeploy if secrets changed?
+		// But for now, we follow the "file change" trigger.
+		// However, if the user manually restarted, or if secrets rotated, we might miss it.
+		// For this task, we stick to file change detection as primary trigger,
+		// OR we can force update if we assume secrets might have changed.
+		// The prompt didn't strictly say "always deploy".
+		// But to be safe with secrets, maybe we should just return if no file change?
+		// No, usually you want to redeploy if secrets update.
+		// But we don't know if secrets updated.
+		// Let's stick to file change for now to avoid restart loops.
+		return 
 	}
 
 	logger.Info("Updating deployment")
@@ -239,7 +304,6 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	}
 
 	// Fetch Repo Hooks (Pre & Post)
-	// We fetch them now so they are ready to run locally
 	err = r.fetchRepoHooks(ctx, *repo.Owner.Login, *repo.Name, "pre", repoLocalPath)
 	if err != nil {
 		logger.Error("Global Fetch Pre-Hook failed, aborting deploy", "error", err)
@@ -251,13 +315,42 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		return
 	}
 
+	// Collect Secrets from Plugins
+	secretPlugins := r.registry.GetPluginsWithCapability("secrets")
+	secretEnv := []string{}
+	
+	for _, p := range secretPlugins {
+		res, err := p.Execute("get_secrets", map[string]interface{}{
+			"owner": *repo.Owner.Login,
+			"repo":  *repo.Name,
+		})
+		if err != nil {
+			logger.Error("Failed to fetch secrets from plugin, aborting deploy", "plugin", p.Name(), "error", err)
+			return
+		}
+		
+		if secrets, ok := res.(map[string]string); ok {
+			for k, v := range secrets {
+				// Append as KEY=VALUE
+				secretEnv = append(secretEnv, fmt.Sprintf("%s=%s", k, v))
+			}
+		}
+	}
+
 	// Prepare Env for Hooks (Pass service context)
 	hookEnv := []string{
 		fmt.Sprintf("REPO_NAME=%s", *repo.Name),
 		fmt.Sprintf("REPO_OWNER=%s", *repo.Owner.Login),
 		fmt.Sprintf("TARGET_DIR=%s", repoLocalPath),
 	}
-
+	// Append secrets to hookEnv as well? 
+	// The prompt said: "Reconciler injects these into the docker compose execution context".
+	// It didn't explicitly say hooks. But hooks might need them.
+	// For safety, let's keep them out of hooks unless requested.
+	// Hooks usually do migrations, which need DB pass. So yes, they likely need them.
+	// But let's verify constraint: "ensure these values are passed only to the exec.Command environment of the specific docker compose process."
+	// Okay, strictly docker compose process.
+	
 	// Run Global PRE Hooks
 	if r.cfg.GlobalHooksDir != "" {
 		if err := utils.ExecuteHooks(filepath.Join(r.cfg.GlobalHooksDir, "pre"), hookEnv, logger); err != nil {
@@ -276,15 +369,18 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	logger.Info("Running docker compose up")
 	cmd := exec.Command("docker", "compose", "up", "-d", "--remove-orphans")
 	cmd.Dir = repoLocalPath
+	
+	// Inject Secrets + Standard Env
+	cmd.Env = append(os.Environ(), secretEnv...)
+
 	if err := cmd.Run(); err != nil {
 		logger.Error("Deploy failed", "error", err)
-		return // Do not run post hooks if deploy failed
+		return
 	}
 
 	// Run Repo POST Hooks
 	if err := utils.ExecuteHooks(filepath.Join(repoLocalPath, ".deploy", "post"), hookEnv, logger); err != nil {
 		logger.Error("Repo Post-hook failed", "error", err)
-		// We don't return here, technically deploy succeeded
 	}
 
 	// Run Global POST Hooks
@@ -300,13 +396,9 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 // fetchRepoHooks downloads all scripts from .deploy/{stage} to the local repo dir
 func (r *Reconciler) fetchRepoHooks(ctx context.Context, owner, repo, stage, localDir string) error {
-	// Look for .deploy/pre or .deploy/post
 	path := fmt.Sprintf(".deploy/%s", stage)
-
-	// GetContents on a directory returns a list of file metadata
 	_, dirContent, _, err := r.client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
-		// 404 just means no hooks for this stage
 		if strings.Contains(err.Error(), "404") {
 			return nil
 		}
@@ -323,7 +415,6 @@ func (r *Reconciler) fetchRepoHooks(ctx context.Context, owner, repo, stage, loc
 			continue
 		}
 
-		// Download individual script content
 		fileContent, _, _, err := r.client.Repositories.GetContents(ctx, owner, repo, fileMeta.GetPath(), nil)
 		if err != nil {
 			r.logger.Error("Failed to fetch hook content", "file", fileMeta.GetName(), "error", err)
@@ -337,7 +428,6 @@ func (r *Reconciler) fetchRepoHooks(ctx context.Context, owner, repo, stage, loc
 
 		localScriptPath := filepath.Join(hooksDir, fileMeta.GetName())
 
-		// Write and chmod +x
 		if err := os.WriteFile(localScriptPath, []byte(decoded), 0755); err != nil {
 			return err
 		}

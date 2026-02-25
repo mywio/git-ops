@@ -19,17 +19,27 @@ const (
 	StatusUnknown   ServiceStatus = "UNKNOWN"
 )
 
+// PluginRegistry allows modules to query for other plugins/capabilities.
+type PluginRegistry interface {
+	GetPlugin(name string) (Plugin, error)
+	GetPluginsWithCapability(cap Capability) []Plugin
+}
+
 type Module interface {
 	Name() string
-	Init(ctx context.Context, logger *slog.Logger) error
+	// Init receives a PluginRegistry for dependency injection/discovery
+	Init(ctx context.Context, logger *slog.Logger, registry PluginRegistry) error
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 }
 
 type Plugin interface {
 	Module
+	Description() string
 	Capabilities() []Capability
 	Status() ServiceStatus
+	// Execute provides a generic entry point for plugin actions
+	Execute(action string, params map[string]interface{}) (interface{}, error)
 }
 
 type ModuleManager struct {
@@ -46,6 +56,35 @@ func NewModuleManager(logger *slog.Logger) *ModuleManager {
 
 func (m *ModuleManager) Register(mod Module) {
 	m.modules = append(m.modules, mod)
+}
+
+// GetPlugin implements PluginRegistry
+func (m *ModuleManager) GetPlugin(name string) (Plugin, error) {
+	for _, mod := range m.modules {
+		if mod.Name() == name {
+			if plug, ok := mod.(Plugin); ok {
+				return plug, nil
+			}
+			return nil, fmt.Errorf("module %s is not a plugin", name)
+		}
+	}
+	return nil, fmt.Errorf("plugin %s not found", name)
+}
+
+// GetPluginsWithCapability implements PluginRegistry
+func (m *ModuleManager) GetPluginsWithCapability(cap Capability) []Plugin {
+	var results []Plugin
+	for _, mod := range m.modules {
+		if plug, ok := mod.(Plugin); ok {
+			for _, c := range plug.Capabilities() {
+				if c == cap {
+					results = append(results, plug)
+					break
+				}
+			}
+		}
+	}
+	return results
 }
 
 func (m *ModuleManager) LoadPlugins(dir string) error {
@@ -80,7 +119,7 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 
 		plug, ok := sym.(Plugin)
 		if !ok {
-			m.logger.Error("Plugin has wrong type", "path", path)
+			m.logger.Error("Plugin has wrong type (must implement core.Plugin)", "path", path)
 			continue
 		}
 
@@ -92,8 +131,9 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 
 func (m *ModuleManager) Init(ctx context.Context) error {
 	for _, mod := range m.modules {
-		if err := mod.Init(ctx, m.logger.With("module", mod.Name())); err != nil {
-			return err
+		// Pass 'm' (ModuleManager) as the PluginRegistry
+		if err := mod.Init(ctx, m.logger.With("module", mod.Name()), m); err != nil {
+			return fmt.Errorf("failed to init module %s: %w", mod.Name(), err)
 		}
 	}
 	return nil
