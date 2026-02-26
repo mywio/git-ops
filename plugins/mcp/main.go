@@ -1,37 +1,43 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mywio/git-ops/pkg/core"
 )
 
-// Plugin interface (assume this matches your core's expected export)
-type Plugin interface {
-	Init(config map[string]string) error
-	Start() error
-	Stop() error
-}
-
-// MCPPlugin struct
+// MCPPlugin struct implements core.Plugin
 type MCPPlugin struct {
 	port      string
 	targetDir string
 	apiKey    string
+	logger    *slog.Logger
+	server    *http.Server
 }
 
-// Exported for plugin loading (core loads symbol "MCPPlugin")
-var MCP = &MCPPlugin{}
+// Exported for plugin loading (core loads symbol "MCPPlugin" or similar)
+var Plugin = &MCPPlugin{}
 
-// Init loads config from env or passed map
-func (p *MCPPlugin) Init(config map[string]string) error {
+// Name returns the plugin name
+func (p *MCPPlugin) Name() string {
+	return "mcp"
+}
+
+// Init initializes the plugin with context, logger, and registry
+func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
+	p.logger = logger
+
+	// Load config from env (or could use registry if it provides config)
 	p.port = os.Getenv("MCP_PORT")
 	if p.port == "" {
 		p.port = "8081"
@@ -41,12 +47,13 @@ func (p *MCPPlugin) Init(config map[string]string) error {
 		p.targetDir = "/opt/stacks"
 	}
 	p.apiKey = os.Getenv("MCP_API_KEY")
-	log.Printf("MCP Plugin Initialized: Port=%s, TargetDir=%s, Auth=%t", p.port, p.targetDir, p.apiKey != "")
+
+	p.logger.Info("MCP Plugin Initialized", "Port", p.port, "TargetDir", p.targetDir, "Auth", p.apiKey != "")
 	return nil
 }
 
-// Start runs the HTTP server in a goroutine
-func (p *MCPPlugin) Start() error {
+// Start starts the plugin services
+func (p *MCPPlugin) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/setup", authMiddleware(p.apiKey, p.handleSetup))
 	mux.HandleFunc("/mcp/stacks", authMiddleware(p.apiKey, p.handleStacks))
@@ -54,18 +61,54 @@ func (p *MCPPlugin) Start() error {
 	mux.HandleFunc("/mcp/logs/", authMiddleware(p.apiKey, p.handleLogs))         // /mcp/logs/:repo/:service?lines=100&since=1h
 	mux.HandleFunc("/mcp/health/", authMiddleware(p.apiKey, p.handleHealth))     // /mcp/health/:repo/:service
 
+	p.server = &http.Server{
+		Addr:    ":" + p.port,
+		Handler: mux,
+	}
+
 	go func() {
-		log.Printf("MCP Server starting on :%s", p.port)
-		if err := http.ListenAndServe(":"+p.port, mux); err != nil {
-			log.Fatalf("MCP Server failed: %v", err)
+		p.logger.Info("MCP Server starting", "port", p.port)
+		if err := p.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			p.logger.Error("MCP Server failed", "error", err)
 		}
 	}()
+
 	return nil
 }
 
-// Stop (placeholder, since server runs in bg)
-func (p *MCPPlugin) Stop() error {
+// Stop stops the plugin services
+func (p *MCPPlugin) Stop(ctx context.Context) error {
+	if p.server != nil {
+		if err := p.server.Shutdown(ctx); err != nil {
+			p.logger.Error("MCP Server shutdown failed", "error", err)
+			return err
+		}
+		p.logger.Info("MCP Server stopped")
+	}
 	return nil
+}
+
+// Description returns a description of the plugin
+func (p *MCPPlugin) Description() string {
+	return "Model Context Protocol Plugin for deploying and debugging multiple Docker Compose stacks for LLM and AI applications"
+}
+
+// Capabilities returns the capabilities of the plugin
+func (p *MCPPlugin) Capabilities() []core.Capability {
+	// Assuming core.Capability is defined; return empty or specific if known
+	return []core.Capability{}
+}
+
+// Status returns the current status of the plugin
+func (p *MCPPlugin) Status() core.ServiceStatus {
+	// Assuming core.ServiceStatus has a State field; adjust as needed
+	return core.StatusHealthy
+}
+
+// Execute executes an action with parameters
+func (p *MCPPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+	// This plugin is HTTP-based, so Execute might not be applicable; return not supported
+	return nil, errors.New("execute not supported for MCP plugin")
 }
 
 // Auth middleware
@@ -217,8 +260,10 @@ func dockerComposeExec(targetDir, repo string, args ...string) (string, error) {
 
 // Main (for standalone testing; ignored in plugin mode)
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	p := &MCPPlugin{}
-	p.Init(nil)
-	p.Start()
+	ctx := context.Background()
+	p.Init(ctx, logger, nil) // nil registry for testing
+	p.Start(ctx)
 	select {} // Block for testing
 }
