@@ -83,7 +83,7 @@ func authMiddleware(key string, next http.HandlerFunc) http.HandlerFunc {
 func (p *MCPPlugin) handleSetup(w http.ResponseWriter, r *http.Request) {
 	setup := map[string]string{
 		"instructions": "To setup a repo: Add topic 'homelab-server-1', place docker-compose.yml at root, hooks in .deploy/pre and .deploy/post.",
-		"topics":       "Use 'ghops-remove' for cleanup.",
+		"topics":       "Use 'git-ops-remove' for cleanup.",
 		"secrets":      "Fetched via plugins at runtime.",
 	}
 	jsonResponse(w, setup)

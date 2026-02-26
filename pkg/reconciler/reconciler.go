@@ -12,21 +12,21 @@ import (
 	"time"
 
 	"github.com/google/go-github/v57/github"
-	"github.com/mywio/GHOps/pkg/config"
-	"github.com/mywio/GHOps/pkg/core"
-	"github.com/mywio/GHOps/pkg/utils"
+	"github.com/mywio/git-ops/pkg/config"
+	"github.com/mywio/git-ops/pkg/core"
+	"github.com/mywio/git-ops/pkg/utils"
 	"golang.org/x/oauth2"
 )
 
 type Reconciler struct {
-	cfg        config.Config
-	client     *github.Client
-	logger     *slog.Logger
-	registry   core.PluginRegistry
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
-	ticker     *time.Ticker
-	started    bool
+	cfg      config.Config
+	client   *github.Client
+	logger   *slog.Logger
+	registry core.PluginRegistry
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	ticker   *time.Ticker
+	started  bool
 }
 
 func NewReconciler(cfg config.Config) *Reconciler {
@@ -94,14 +94,14 @@ func (r *Reconciler) Stop(ctx context.Context) error {
 	}
 	close(r.stopCh)
 	r.logger.Info("Waiting for reconciliation to finish...")
-	
+
 	// Create a channel that closes when wg.Wait returns
 	done := make(chan struct{})
 	go func() {
 		r.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		r.logger.Info("Reconciler stopped gracefully")
@@ -123,7 +123,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	// 1. Build Desired State (What should exist)
 	// Map Key: "Owner/RepoName"
 	desiredState := make(map[string]*github.Repository)
-	
+
 	// 2. Build Removal State (What should be explicitly removed)
 	removalState := make(map[string]bool)
 
@@ -136,8 +136,8 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		queryDesired := fmt.Sprintf("user:%s topic:%s archived:false", user, r.cfg.Topic)
 		r.fetchReposInto(ctx, queryDesired, desiredState)
 
-		// Query 2: Removal Candidates - Topic "ghops-remove"
-		queryRemoveTopic := fmt.Sprintf("user:%s topic:ghops-remove", user)
+		// Query 2: Removal Candidates - Topic "git-ops-remove"
+		queryRemoveTopic := fmt.Sprintf("user:%s topic:git-ops-remove", user)
 		r.fetchRemovalInto(ctx, queryRemoveTopic, removalState)
 
 		// Query 3: Removal Candidates - Archived but with main Topic
@@ -289,7 +289,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		// No, usually you want to redeploy if secrets update.
 		// But we don't know if secrets updated.
 		// Let's stick to file change for now to avoid restart loops.
-		return 
+		return
 	}
 
 	logger.Info("Updating deployment")
@@ -318,7 +318,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	// Collect Secrets from Plugins
 	secretPlugins := r.registry.GetPluginsWithCapability("secrets")
 	secretEnv := []string{}
-	
+
 	for _, p := range secretPlugins {
 		res, err := p.Execute("get_secrets", map[string]interface{}{
 			"owner": *repo.Owner.Login,
@@ -328,7 +328,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 			logger.Error("Failed to fetch secrets from plugin, aborting deploy", "plugin", p.Name(), "error", err)
 			return
 		}
-		
+
 		if secrets, ok := res.(map[string]string); ok {
 			for k, v := range secrets {
 				// Append as KEY=VALUE
@@ -343,14 +343,14 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		fmt.Sprintf("REPO_OWNER=%s", *repo.Owner.Login),
 		fmt.Sprintf("TARGET_DIR=%s", repoLocalPath),
 	}
-	// Append secrets to hookEnv as well? 
+	// Append secrets to hookEnv as well?
 	// The prompt said: "Reconciler injects these into the docker compose execution context".
 	// It didn't explicitly say hooks. But hooks might need them.
 	// For safety, let's keep them out of hooks unless requested.
 	// Hooks usually do migrations, which need DB pass. So yes, they likely need them.
 	// But let's verify constraint: "ensure these values are passed only to the exec.Command environment of the specific docker compose process."
 	// Okay, strictly docker compose process.
-	
+
 	// Run Global PRE Hooks
 	if r.cfg.GlobalHooksDir != "" {
 		if err := utils.ExecuteHooks(filepath.Join(r.cfg.GlobalHooksDir, "pre"), hookEnv, logger); err != nil {
@@ -369,7 +369,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	logger.Info("Running docker compose up")
 	cmd := exec.Command("docker", "compose", "up", "-d", "--remove-orphans")
 	cmd.Dir = repoLocalPath
-	
+
 	// Inject Secrets + Standard Env
 	cmd.Env = append(os.Environ(), secretEnv...)
 

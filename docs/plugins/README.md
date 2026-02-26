@@ -1,6 +1,6 @@
 # Plugins
 
-GHOps uses a modular architecture where functionalities are loaded as plugins.
+Git-Ops uses a modular architecture where functionalities are loaded as plugins.
 Each plugin is a shared object (`.so`) file loaded at runtime.
 
 ## Available Plugins

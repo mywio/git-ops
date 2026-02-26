@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mywio/GHOps/pkg/config"
-	"github.com/mywio/GHOps/pkg/core"
-	"github.com/mywio/GHOps/pkg/reconciler"
+	"github.com/mywio/git-ops/pkg/config"
+	"github.com/mywio/git-ops/pkg/core"
+	"github.com/mywio/git-ops/pkg/reconciler"
 )
 
 func main() {

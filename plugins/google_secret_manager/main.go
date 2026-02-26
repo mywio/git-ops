@@ -9,7 +9,7 @@ import (
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
-	"github.com/mywio/GHOps/pkg/core"
+	"github.com/mywio/git-ops/pkg/core"
 	"google.golang.org/api/iterator"
 )
 
@@ -31,7 +31,7 @@ func (p *SecretManagerPlugin) Description() string {
 
 func (p *SecretManagerPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
-	
+
 	// Get Project ID from Env
 	p.projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if p.projectID == "" {
@@ -85,11 +85,11 @@ func (p *SecretManagerPlugin) Execute(action string, params map[string]interface
 		return map[string]string{}, fmt.Errorf("GOOGLE_CLOUD_PROJECT not configured")
 	}
 
-	// Strategy: List secrets with label "ghops_repo=<owner>-<repo>"
-	// or "ghops_owner=<owner>" AND "ghops_repo=<repo>"
+	// Strategy: List secrets with label "git-ops_repo=<owner>-<repo>"
+	// or "git-ops_owner=<owner>" AND "git-ops_repo=<repo>"
 	// Filter syntax: labels.key=value
-	filter := fmt.Sprintf("labels.ghops_owner=%s AND labels.ghops_repo=%s", owner, repo)
-	
+	filter := fmt.Sprintf("labels.git-ops_owner=%s AND labels.git-ops_repo=%s", owner, repo)
+
 	req := &secretmanagerpb.ListSecretsRequest{
 		Parent: fmt.Sprintf("projects/%s", p.projectID),
 		Filter: filter,
@@ -123,13 +123,13 @@ func (p *SecretManagerPlugin) Execute(action string, params map[string]interface
 
 		// Extract the Env Var Key from the secret name or a label?
 		// Let's assume the secret name is the key (or last part of it)
-		// Or utilize a label `ghops_key`
+		// Or utilize a label `git-ops_key`
 		// For simplicity, let's use the secret name's last part, uppercase
 		parts := strings.Split(resp.Name, "/")
 		key := strings.ToUpper(parts[len(parts)-1])
-		
+
 		// If there is a specific label for the key, use it
-		if val, ok := resp.Labels["ghops_env_key"]; ok {
+		if val, ok := resp.Labels["git-ops_env_key"]; ok {
 			key = val
 		}
 

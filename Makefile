@@ -1,4 +1,4 @@
-BINARY_NAME=ghops
+BINARY_NAME=git-ops
 BUILD_DIR=bin
 PLUGINS_DIR=$(BUILD_DIR)/plugins
 

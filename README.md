@@ -1,6 +1,6 @@
-# GHOps: Dynamic GitHub Topic Deployer
+# git-ops: Dynamic GitHub Topic Deployer
 
-GHOps is a lightweight, "GitOps-lite" operator written in Go. It automatically discovers, syncs, and deploys Docker Compose stacks from your GitHub repositories based on Topics.
+git-ops is a lightweight, "GitOps-lite" operator written in Go. It automatically discovers, syncs, and deploys Docker Compose stacks from your GitHub repositories based on Topics.
 
 ## Features
 - **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
@@ -22,7 +22,7 @@ make build
 make plugins
 ```
 
-The binary will be in `bin/ghops` and plugins in `bin/plugins/`.
+The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 
 ## Configuration (Env Vars)
 
@@ -32,13 +32,13 @@ The binary will be in `bin/ghops` and plugins in `bin/plugins/`.
 | `GITHUB_USERS` | Comma-separated users/orgs to scan | Yes | `myuser,myorg` |
 | `TOPIC_FILTER` | The GitHub Topic to watch for | Yes | `homelab-server-1` |
 | `TARGET_DIR` | Local path to store stacks | No | `/opt/stacks` |
-| `GLOBAL_HOOKS_DIR`| Path to server-wide hooks | No | `/etc/ghops/hooks` |
+| `GLOBAL_HOOKS_DIR`| Path to server-wide hooks | No | `/etc/git-ops/hooks` |
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
 | `DRY_RUN` | Log only, no changes | No | `false` |
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
 
 ## Plugins
-GHOps supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
+git-ops supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
 
 Available plugins:
 - **Google Secret Manager**: Injects secrets from GSM into deployments.

@@ -1,4 +1,4 @@
-module github.com/mywio/GHOps
+module github.com/mywio/git-ops
 
 go 1.24.0
 

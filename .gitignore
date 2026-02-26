@@ -24,4 +24,4 @@ fabric.properties
 # Build artifacts
 bin/
 *.so
-ghops
+git-ops

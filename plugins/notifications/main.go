@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/mywio/GHOps/pkg/core"
+	"github.com/mywio/git-ops/pkg/core"
 )
 
 type NotificationPlugin struct {
