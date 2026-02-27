@@ -46,6 +46,82 @@ Notes:
 CONFIG_FILE=/etc/git-ops/config.yaml ./bin/git-ops
 ```
 
+## Update
+```bash
+git pull
+make build
+make plugins
+systemctl restart git-ops
+```
+
+Notes:
+- If you are not using systemd, restart your process manager instead.
+- Rebuild after updating so plugins and embedded docs stay in sync.
+
+## Auto-update options
+
+### Docker + Watchtower
+This requires publishing a container image (e.g., to GHCR) that already contains
+the built core binary and plugins.
+
+Example `docker-compose.yml`:
+```yaml
+services:
+  git-ops:
+    image: ghcr.io/your-org/git-ops:latest
+    environment:
+      - CONFIG_FILE=/etc/git-ops/config.yaml
+      - SECRET_API_KEY=example
+      - DB_PASSWORD=example
+    volumes:
+      - /etc/git-ops:/etc/git-ops:ro
+      - /opt/stacks:/opt/stacks
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    command: --cleanup --interval 300
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+```
+
+### Systemd timer (git pull + rebuild)
+This keeps a source checkout updated and rebuilds on a schedule.
+
+`/etc/systemd/system/git-ops-update.service`:
+```ini
+[Unit]
+Description=Update git-ops
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/git-ops
+ExecStart=/usr/bin/git pull
+ExecStart=/usr/bin/make build
+ExecStart=/usr/bin/make plugins
+ExecStart=/bin/systemctl restart git-ops
+```
+
+`/etc/systemd/system/git-ops-update.timer`:
+```ini
+[Unit]
+Description=Periodic git-ops update
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable:
+```bash
+systemctl daemon-reload
+systemctl enable --now git-ops-update.timer
+```
+
 ## Plugin precedence
 Secret plugins are loaded in `.so` filename order. If multiple plugins return the
 same key, the first wins and `notify_secret_conflict` is emitted.
