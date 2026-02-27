@@ -14,6 +14,11 @@ Auth:
 Endpoints:
 - `GET /mcp/setup`
 - `GET /mcp/stacks`
+- `GET /mcp/deployments`
 - `GET /mcp/services/{repo}`
 - `GET /mcp/logs/{repo}/{service}?lines=100&since=1h`
 - `GET /mcp/health/{repo}/{service}`
+- `GET /mcp/docs/`
+
+Docs:
+- `docs/` is embedded into the plugin at build time.

@@ -12,6 +12,7 @@ build:
 
 plugins:
 	mkdir -p $(PLUGINS_DIR)
+	go run ./scripts/sync_mcp_docs.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/env_forwarder.so plugins/env_forwarder/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/google_secret_manager.so plugins/google_secret_manager/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/mcp.so plugins/mcp/main.go

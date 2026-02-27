@@ -52,6 +52,10 @@ same key, the first wins and `notify_secret_conflict` is emitted.
 
 Prefixing filenames (e.g., `01_env_forwarder.so`) controls precedence.
 
+## MCP docs
+The MCP plugin embeds the `docs/` folder at build time. The docs are served at
+`/mcp/docs/` on the MCP HTTP server.
+
 ## Systemd example
 ```ini
 [Unit]

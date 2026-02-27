@@ -2,20 +2,27 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
+
+//go:embed docs/*
+//go:embed docs/**/*
+var docsFS embed.FS
 
 // MCPPlugin struct implements core.Plugin
 type MCPPlugin struct {
@@ -25,11 +32,25 @@ type MCPPlugin struct {
 	apiKey    string
 	mux       *http.ServeMux
 	wg        *sync.WaitGroup
+
+	deployMu    sync.RWMutex
+	deployments map[string]deploymentInfo
 }
 
 type mcpConfig struct {
 	TargetDir string `yaml:"target_dir"`
 	APIKey    string `yaml:"api_key"`
+}
+
+type deploymentInfo struct {
+	FullName  string    `json:"full_name"`
+	Owner     string    `json:"owner"`
+	Repo      string    `json:"repo"`
+	Status    string    `json:"status"`
+	Message   string    `json:"message,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Duration  string    `json:"duration,omitempty"`
+	Source    string    `json:"source,omitempty"`
 }
 // Exported for plugin loading (core loads symbol "MCPPlugin" or similar)
 var Plugin = &MCPPlugin{}
@@ -45,6 +66,9 @@ func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core
 	if p.wg == nil {
 		p.wg = &sync.WaitGroup{}
 	}
+	if p.deployments == nil {
+		p.deployments = make(map[string]deploymentInfo)
+	}
 
 	if registry != nil {
 		cfg := registry.GetConfig()
@@ -57,6 +81,7 @@ func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core
 			p.apiKey = mcfg.APIKey
 		}
 		p.mux = registry.GetMuxServer()
+		registry.Subscribe("deploy_*", p.handleDeployEvent)
 	} else {
 		p.mux = http.NewServeMux()
 	}
@@ -73,9 +98,22 @@ func (p *MCPPlugin) Start(ctx context.Context) error {
 	//mux := http.NewServeMux()
 	p.mux.HandleFunc("/mcp/setup", authMiddleware(p.apiKey, p.handleSetup))
 	p.mux.HandleFunc("/mcp/stacks", authMiddleware(p.apiKey, p.handleStacks))
+	p.mux.HandleFunc("/mcp/deployments", authMiddleware(p.apiKey, p.handleDeployments))
 	p.mux.HandleFunc("/mcp/services/", authMiddleware(p.apiKey, p.handleServices)) // /mcp/services/:repo
 	p.mux.HandleFunc("/mcp/logs/", authMiddleware(p.apiKey, p.handleLogs))         // /mcp/logs/:repo/:service?lines=100&since=1h
 	p.mux.HandleFunc("/mcp/health/", authMiddleware(p.apiKey, p.handleHealth))     // /mcp/health/:repo/:service
+
+	if docsSub, err := fs.Sub(docsFS, "docs"); err == nil {
+		fileServer := http.FileServer(http.FS(docsSub))
+		p.mux.HandleFunc("/mcp/docs", authMiddleware(p.apiKey, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/mcp/docs/", http.StatusMovedPermanently)
+		}))
+		p.mux.HandleFunc("/mcp/docs/", authMiddleware(p.apiKey, func(w http.ResponseWriter, r *http.Request) {
+			http.StripPrefix("/mcp/docs/", fileServer).ServeHTTP(w, r)
+		}))
+	} else {
+		p.logger.Warn("MCP docs not available", "error", err)
+	}
 	return nil
 }
 
@@ -143,16 +181,39 @@ func (p *MCPPlugin) handleStacks(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
-	stacks := []map[string]string{}
+	stacks := []map[string]interface{}{}
 	for _, repo := range repos {
 		lastSync, _ := os.Stat(filepath.Join(p.targetDir, repo)) // Approx last reconcile
-		stacks = append(stacks, map[string]string{
+		entry := map[string]interface{}{
 			"repo":     repo,
 			"lastSync": lastSync.ModTime().Format(time.RFC3339),
 			"status":   "deployed", // Could enhance with more checks
-		})
+		}
+		if info, ok := p.getDeploymentInfo(repo); ok {
+			entry["lastDeploy"] = info.UpdatedAt.Format(time.RFC3339)
+			entry["deployStatus"] = info.Status
+		}
+		stacks = append(stacks, entry)
 	}
 	jsonResponse(w, stacks)
+}
+
+func (p *MCPPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
+	p.deployMu.RLock()
+	entries := make([]deploymentInfo, 0, len(p.deployments))
+	for _, info := range p.deployments {
+		entries = append(entries, info)
+	}
+	p.deployMu.RUnlock()
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+	})
+
+	jsonResponse(w, entries)
 }
 
 // handleServices - New: list services for a repo
@@ -232,6 +293,48 @@ func (p *MCPPlugin) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, health)
+}
+
+func (p *MCPPlugin) handleDeployEvent(ctx context.Context, event core.InternalEvent) {
+	owner, _ := event.Details["owner"].(string)
+	repo, _ := event.Details["repo"].(string)
+	fullName := ""
+	if owner != "" && repo != "" {
+		fullName = fmt.Sprintf("%s/%s", owner, repo)
+	} else if v, ok := event.Details["full_name"].(string); ok {
+		fullName = v
+	}
+	if fullName == "" {
+		return
+	}
+
+	info := deploymentInfo{
+		FullName:  fullName,
+		Owner:     owner,
+		Repo:      repo,
+		Status:    string(event.Type),
+		Message:   event.String,
+		UpdatedAt: event.Timestamp,
+		Source:    event.Source,
+	}
+	if v, ok := event.Details["duration"].(string); ok {
+		info.Duration = v
+	}
+
+	p.deployMu.Lock()
+	p.deployments[fullName] = info
+	p.deployMu.Unlock()
+}
+
+func (p *MCPPlugin) getDeploymentInfo(repo string) (deploymentInfo, bool) {
+	p.deployMu.RLock()
+	defer p.deployMu.RUnlock()
+	for _, info := range p.deployments {
+		if info.Repo == repo || strings.HasSuffix(info.FullName, "/"+repo) {
+			return info, true
+		}
+	}
+	return deploymentInfo{}, false
 }
 
 // Helpers
