@@ -29,7 +29,8 @@ func TestMCPPlugin(t *testing.T) {
 	assert.NoError(t, err)
 
 	caps := Plugin.Capabilities()
-	assert.Contains(t, caps, core.Capability("ai-context"))
+	assert.Contains(t, caps, core.CapabilityMCP)
+	assert.Contains(t, caps, core.CapabilityAPI)
 
 	status := Plugin.Status()
 	assert.Equal(t, core.StatusHealthy, status)

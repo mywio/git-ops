@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
@@ -18,13 +19,18 @@ import (
 
 // MCPPlugin struct implements core.Plugin
 type MCPPlugin struct {
+	logger    *slog.Logger
 	port      string
 	targetDir string
 	apiKey    string
-	logger    *slog.Logger
-	server    *http.Server
+	mux       *http.ServeMux
+	wg        *sync.WaitGroup
 }
 
+type mcpConfig struct {
+	TargetDir string `yaml:"target_dir"`
+	APIKey    string `yaml:"api_key"`
+}
 // Exported for plugin loading (core loads symbol "MCPPlugin" or similar)
 var Plugin = &MCPPlugin{}
 
@@ -36,17 +42,27 @@ func (p *MCPPlugin) Name() string {
 // Init initializes the plugin with context, logger, and registry
 func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
-
-	// Load config from env (or could use registry if it provides config)
-	p.port = os.Getenv("MCP_PORT")
-	if p.port == "" {
-		p.port = "8081"
+	if p.wg == nil {
+		p.wg = &sync.WaitGroup{}
 	}
-	p.targetDir = os.Getenv("TARGET_DIR")
+
+	if registry != nil {
+		cfg := registry.GetConfig()
+		if section, ok := cfg["mcp"]; ok {
+			var mcfg mcpConfig
+			if err := core.DecodeConfigSection(section, &mcfg); err != nil {
+				p.logger.Warn("Invalid mcp config", "error", err)
+			}
+			p.targetDir = mcfg.TargetDir
+			p.apiKey = mcfg.APIKey
+		}
+		p.mux = registry.GetMuxServer()
+	} else {
+		p.mux = http.NewServeMux()
+	}
 	if p.targetDir == "" {
 		p.targetDir = "/opt/stacks"
 	}
-	p.apiKey = os.Getenv("MCP_API_KEY")
 
 	p.logger.Info("MCP Plugin Initialized", "Port", p.port, "TargetDir", p.targetDir, "Auth", p.apiKey != "")
 	return nil
@@ -54,37 +70,19 @@ func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core
 
 // Start starts the plugin services
 func (p *MCPPlugin) Start(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp/setup", authMiddleware(p.apiKey, p.handleSetup))
-	mux.HandleFunc("/mcp/stacks", authMiddleware(p.apiKey, p.handleStacks))
-	mux.HandleFunc("/mcp/services/", authMiddleware(p.apiKey, p.handleServices)) // /mcp/services/:repo
-	mux.HandleFunc("/mcp/logs/", authMiddleware(p.apiKey, p.handleLogs))         // /mcp/logs/:repo/:service?lines=100&since=1h
-	mux.HandleFunc("/mcp/health/", authMiddleware(p.apiKey, p.handleHealth))     // /mcp/health/:repo/:service
-
-	p.server = &http.Server{
-		Addr:    ":" + p.port,
-		Handler: mux,
-	}
-
-	go func() {
-		p.logger.Info("MCP Server starting", "port", p.port)
-		if err := p.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			p.logger.Error("MCP Server failed", "error", err)
-		}
-	}()
-
+	//mux := http.NewServeMux()
+	p.mux.HandleFunc("/mcp/setup", authMiddleware(p.apiKey, p.handleSetup))
+	p.mux.HandleFunc("/mcp/stacks", authMiddleware(p.apiKey, p.handleStacks))
+	p.mux.HandleFunc("/mcp/services/", authMiddleware(p.apiKey, p.handleServices)) // /mcp/services/:repo
+	p.mux.HandleFunc("/mcp/logs/", authMiddleware(p.apiKey, p.handleLogs))         // /mcp/logs/:repo/:service?lines=100&since=1h
+	p.mux.HandleFunc("/mcp/health/", authMiddleware(p.apiKey, p.handleHealth))     // /mcp/health/:repo/:service
 	return nil
 }
 
 // Stop stops the plugin services
 func (p *MCPPlugin) Stop(ctx context.Context) error {
-	if p.server != nil {
-		if err := p.server.Shutdown(ctx); err != nil {
-			p.logger.Error("MCP Server shutdown failed", "error", err)
-			return err
-		}
-		p.logger.Info("MCP Server stopped")
-	}
+	p.wg.Wait()
+	p.logger.Info("MCP Server stopped")
 	return nil
 }
 
@@ -96,7 +94,7 @@ func (p *MCPPlugin) Description() string {
 // Capabilities returns the capabilities of the plugin
 func (p *MCPPlugin) Capabilities() []core.Capability {
 	// Assuming core.Capability is defined; return empty or specific if known
-	return []core.Capability{}
+	return []core.Capability{core.CapabilityMCP, core.CapabilityAPI}
 }
 
 // Status returns the current status of the plugin
@@ -124,6 +122,9 @@ func authMiddleware(key string, next http.HandlerFunc) http.HandlerFunc {
 
 // handleSetup - Current feature: returns setup instructions
 func (p *MCPPlugin) handleSetup(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	setup := map[string]string{
 		"instructions": "To setup a repo: Add topic 'homelab-server-1', place docker-compose.yml at root, hooks in .deploy/pre and .deploy/post.",
 		"topics":       "Use 'git-ops-remove' for cleanup.",
@@ -134,6 +135,9 @@ func (p *MCPPlugin) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 // handleStacks - New: list deployed repos/stacks
 func (p *MCPPlugin) handleStacks(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	repos, err := listDirs(p.targetDir)
 	if err != nil {
 		jsonError(w, err)
@@ -153,6 +157,9 @@ func (p *MCPPlugin) handleStacks(w http.ResponseWriter, r *http.Request) {
 
 // handleServices - New: list services for a repo
 func (p *MCPPlugin) handleServices(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	repo := strings.TrimPrefix(r.URL.Path, "/mcp/services/")
 	if repo == "" {
 		jsonError(w, errors.New("repo required"))
@@ -174,6 +181,9 @@ func (p *MCPPlugin) handleServices(w http.ResponseWriter, r *http.Request) {
 
 // handleLogs - New: get logs for service
 func (p *MCPPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/mcp/logs/"), "/", 2)
 	if len(parts) != 2 {
 		jsonError(w, errors.New("format: /logs/:repo/:service"))
@@ -200,6 +210,9 @@ func (p *MCPPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth - New: health status for service
 func (p *MCPPlugin) handleHealth(w http.ResponseWriter, r *http.Request) {
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/mcp/health/"), "/", 2)
 	if len(parts) != 2 {
 		jsonError(w, errors.New("format: /health/:repo/:service"))

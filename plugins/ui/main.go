@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
 
 type UIPlugin struct {
+	mux    *http.ServeMux
 	logger *slog.Logger
 }
 
@@ -23,6 +25,9 @@ func (p *UIPlugin) Description() string {
 
 func (p *UIPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
+	if registry != nil {
+		p.mux = registry.GetMuxServer()
+	}
 	return nil
 }
 
@@ -36,7 +41,7 @@ func (p *UIPlugin) Stop(ctx context.Context) error {
 }
 
 func (p *UIPlugin) Capabilities() []core.Capability {
-	return []core.Capability{"dashboard"}
+	return []core.Capability{core.CapabilityUI, core.CapabilityAPI}
 }
 
 func (p *UIPlugin) Status() core.ServiceStatus {

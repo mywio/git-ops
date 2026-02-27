@@ -4,25 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"plugin"
 	"strings"
-)
-
-type Capability string
-type ServiceStatus string
-
-const (
-	StatusHealthy   ServiceStatus = "HEALTHY"
-	StatusUnhealthy ServiceStatus = "UNHEALTHY"
-	StatusUnknown   ServiceStatus = "UNKNOWN"
+	"sync"
+	"time"
 )
 
 // PluginRegistry allows modules to query for other plugins/capabilities.
 type PluginRegistry interface {
 	GetPlugin(name string) (Plugin, error)
 	GetPluginsWithCapability(cap Capability) []Plugin
+	RegisterEventType(desc EventTypeDesc) error
+	GetMuxServer() *http.ServeMux
+	Subscribe(pattern string, handler Listener)
+	GetHTTPClient() *http.Client
+	GetConfig() map[string]map[string]any
 }
 
 type Module interface {
@@ -45,13 +44,63 @@ type Plugin interface {
 type ModuleManager struct {
 	modules []Module
 	logger  *slog.Logger
+	mux     *http.ServeMux
+	server  *http.Server
+
+	httpClient *http.Client
+	configMu   sync.RWMutex
+	config     map[string]map[string]any
+}
+
+func (m *ModuleManager) RegisterEventType(desc EventTypeDesc) error {
+	return registerEventType(desc)
+}
+
+func (m *ModuleManager) GetMuxServer() *http.ServeMux {
+	return m.mux
 }
 
 func NewModuleManager(logger *slog.Logger) *ModuleManager {
 	return &ModuleManager{
 		modules: []Module{},
 		logger:  logger,
+		mux:     http.NewServeMux(),
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		config: map[string]map[string]any{},
 	}
+}
+
+func (m *ModuleManager) Subscribe(pattern string, handler Listener) {
+	Subscribe(pattern, handler)
+}
+
+func (m *ModuleManager) GetHTTPClient() *http.Client {
+	if m.httpClient != nil {
+		return m.httpClient
+	}
+	return http.DefaultClient
+}
+
+func (m *ModuleManager) SetHTTPClient(client *http.Client) {
+	if client == nil {
+		m.httpClient = http.DefaultClient
+		return
+	}
+	m.httpClient = client
+}
+
+func (m *ModuleManager) GetConfig() map[string]map[string]any {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	return cloneConfigMap(m.config)
+}
+
+func (m *ModuleManager) SetConfig(cfg map[string]map[string]any) {
+	m.configMu.Lock()
+	defer m.configMu.Unlock()
+	m.config = cloneConfigMap(cfg)
 }
 
 func (m *ModuleManager) Register(mod Module) {
@@ -131,7 +180,6 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 
 func (m *ModuleManager) Init(ctx context.Context) error {
 	for _, mod := range m.modules {
-		// Pass 'm' (ModuleManager) as the PluginRegistry
 		if err := mod.Init(ctx, m.logger.With("module", mod.Name()), m); err != nil {
 			return fmt.Errorf("failed to init module %s: %w", mod.Name(), err)
 		}
@@ -158,4 +206,19 @@ func (m *ModuleManager) Stop(ctx context.Context) {
 			m.logger.Error("Error stopping module", "module", mod.Name(), "error", err)
 		}
 	}
+}
+
+func cloneConfigMap(src map[string]map[string]any) map[string]map[string]any {
+	if len(src) == 0 {
+		return map[string]map[string]any{}
+	}
+	dst := make(map[string]map[string]any, len(src))
+	for section, values := range src {
+		sectionCopy := make(map[string]any, len(values))
+		for k, v := range values {
+			sectionCopy[k] = v
+		}
+		dst[section] = sectionCopy
+	}
+	return dst
 }

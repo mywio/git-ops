@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
@@ -19,6 +18,10 @@ type SecretManagerPlugin struct {
 	projectID string
 }
 
+type secretManagerConfig struct {
+	ProjectID string `yaml:"project_id"`
+	Project   string `yaml:"project"`
+}
 var Plugin = &SecretManagerPlugin{}
 
 func (p *SecretManagerPlugin) Name() string {
@@ -32,8 +35,20 @@ func (p *SecretManagerPlugin) Description() string {
 func (p *SecretManagerPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
 
-	// Get Project ID from Env
-	p.projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	if registry != nil {
+		cfg := registry.GetConfig()
+		if section, ok := cfg["google_secret_manager"]; ok {
+			var scfg secretManagerConfig
+			if err := core.DecodeConfigSection(section, &scfg); err != nil {
+				p.logger.Warn("Invalid google_secret_manager config", "error", err)
+			}
+			if scfg.ProjectID != "" {
+				p.projectID = scfg.ProjectID
+			} else {
+				p.projectID = scfg.Project
+			}
+		}
+	}
 	if p.projectID == "" {
 		logger.Warn("GOOGLE_CLOUD_PROJECT not set, secret fetching will fail")
 	}
