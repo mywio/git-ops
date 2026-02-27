@@ -135,9 +135,6 @@ func (m *ModuleManager) GetPluginsWithCapability(cap Capability) []Plugin {
 			}
 		}
 	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Name() < results[j].Name()
-	})
 	return results
 }
 
@@ -151,6 +148,9 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 		}
 		return fmt.Errorf("failed to read plugins dir: %w", err)
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".so") {

@@ -15,9 +15,10 @@ Per-plugin docs live with their source. Start here:
 - [Webhook Trigger](../../plugins/webhook_trigger/README.md)
 
 ## Secret Precedence
-Secret plugins are ordered by plugin name. If multiple plugins return the same
-key, the first one wins. A `notify_secret_conflict` event is emitted.
-Prefixing a plugin name (e.g., `01_env_forwarder`) controls precedence.
+Secret plugins are ordered by plugin load order (sorted by `.so` file name).
+If multiple plugins return the same key, the first one wins. A
+`notify_secret_conflict` event is emitted. Prefixing a plugin file name
+(e.g., `01_env_forwarder.so`) controls precedence.
 
 ## Developing Plugins
 Plugins must implement the `Plugin` interface defined in `pkg/core/module.go`.

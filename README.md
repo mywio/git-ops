@@ -37,6 +37,9 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 | `DRY_RUN` | Log only, no changes | No | `false` |
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
 
+You can also use a YAML config file (default `config.yaml` or set `CONFIG_FILE`).
+See `examples/config.yaml` and `docs/deploy.md`.
+
 ## Plugins
 git-ops supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
 
@@ -48,6 +51,9 @@ Available plugins:
 - **Notifications**: Pushover/Webhook alerts.
 
 See [docs/plugins/](docs/plugins/) for more details.
+
+## Deployment
+See `docs/deploy.md` for build and run instructions.
 
 ## How it Works
 1.  **Scan:** Periodically queries GitHub for repositories matching a specific User and Topic (e.g., `topic:homelab-node-1`).

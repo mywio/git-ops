@@ -12,9 +12,13 @@ build:
 
 plugins:
 	mkdir -p $(PLUGINS_DIR)
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/env_forwarder.so plugins/env_forwarder/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/google_secret_manager.so plugins/google_secret_manager/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/mcp.so plugins/mcp/main.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_pushover.so plugins/notifier_pushover/pushover.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_webhook.so plugins/notifier_webhook/notifier_webhook.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/main.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/webhook_trigger.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifications.so plugins/notifications/main.go
 
 clean:
