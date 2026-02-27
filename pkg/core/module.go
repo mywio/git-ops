@@ -60,6 +60,7 @@ func (m *ModuleManager) GetMuxServer() *http.ServeMux {
 	return m.mux
 }
 
+// NewModuleManager creates a new ModuleManager instance.
 func NewModuleManager(logger *slog.Logger) *ModuleManager {
 	return &ModuleManager{
 		modules: []Module{},
@@ -136,6 +137,7 @@ func (m *ModuleManager) GetPluginsWithCapability(cap Capability) []Plugin {
 	return results
 }
 
+// LoadPlugins loads plugins from a directory and registers them with the module manager.
 func (m *ModuleManager) LoadPlugins(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -178,6 +180,7 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 	return nil
 }
 
+// Init initializes all modules in the manager.
 func (m *ModuleManager) Init(ctx context.Context) error {
 	for _, mod := range m.modules {
 		if err := mod.Init(ctx, m.logger.With("module", mod.Name()), m); err != nil {
@@ -187,6 +190,7 @@ func (m *ModuleManager) Init(ctx context.Context) error {
 	return nil
 }
 
+// Start starts all modules in the manager.
 func (m *ModuleManager) Start(ctx context.Context) {
 	for _, mod := range m.modules {
 		go func(mod Module) {
@@ -198,6 +202,7 @@ func (m *ModuleManager) Start(ctx context.Context) {
 	}
 }
 
+// Stop stops all modules in the manager.
 func (m *ModuleManager) Stop(ctx context.Context) {
 	for i := len(m.modules) - 1; i >= 0; i-- {
 		mod := m.modules[i]
@@ -208,6 +213,7 @@ func (m *ModuleManager) Stop(ctx context.Context) {
 	}
 }
 
+// cloneConfigMap creates a deep copy of a configuration map.
 func cloneConfigMap(src map[string]map[string]any) map[string]map[string]any {
 	if len(src) == 0 {
 		return map[string]map[string]any{}
