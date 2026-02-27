@@ -26,3 +26,10 @@ mcp:
 
 google_secret_manager:
   project_id: "my-gcp-project"
+
+env_forwarder:
+  keys:
+    - "SECRET_API_KEY"
+    - "DB_PASSWORD"
+  prefixes:
+    - "APP_"

@@ -6,12 +6,18 @@ Each plugin is a shared object (`.so`) file loaded at runtime.
 Per-plugin docs live with their source. Start here:
 
 - [Google Secret Manager](../../plugins/google_secret_manager/README.md)
+- [Env Forwarder](../../plugins/env_forwarder/README.md)
 - [MCP](../../plugins/mcp/README.md)
 - [Notifications](../../plugins/notifications/README.md)
 - [Pushover Notifier](../../plugins/notifier_pushover/README.md)
 - [Webhook Notifier](../../plugins/notifier_webhook/README.md)
 - [UI](../../plugins/ui/README.md)
 - [Webhook Trigger](../../plugins/webhook_trigger/README.md)
+
+## Secret Precedence
+Secret plugins are ordered by plugin name. If multiple plugins return the same
+key, the first one wins. A `notify_secret_conflict` event is emitted.
+Prefixing a plugin name (e.g., `01_env_forwarder`) controls precedence.
 
 ## Developing Plugins
 Plugins must implement the `Plugin` interface defined in `pkg/core/module.go`.

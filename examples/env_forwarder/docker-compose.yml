@@ -1,0 +1,9 @@
+version: "3.8"
+services:
+  demo:
+    image: alpine:3.20
+    command: ["sh", "-c", "echo SECRET_API_KEY=$SECRET_API_KEY; echo DB_PASSWORD=$DB_PASSWORD; echo APP_TOKEN=$APP_TOKEN; sleep 3600"]
+    environment:
+      - SECRET_API_KEY
+      - DB_PASSWORD
+      - APP_TOKEN
