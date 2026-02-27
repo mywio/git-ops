@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"plugin"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -134,6 +135,9 @@ func (m *ModuleManager) GetPluginsWithCapability(cap Capability) []Plugin {
 			}
 		}
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name() < results[j].Name()
+	})
 	return results
 }
 

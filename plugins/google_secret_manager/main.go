@@ -74,7 +74,7 @@ func (p *SecretManagerPlugin) Stop(ctx context.Context) error {
 }
 
 func (p *SecretManagerPlugin) Capabilities() []core.Capability {
-	return []core.Capability{"secrets"}
+	return []core.Capability{core.CapabilitySecrets}
 }
 
 func (p *SecretManagerPlugin) Status() core.ServiceStatus {

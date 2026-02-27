@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -316,8 +317,10 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	}
 
 	// Collect Secrets from Plugins
-	secretPlugins := r.registry.GetPluginsWithCapability("secrets")
+	secretPlugins := r.registry.GetPluginsWithCapability(core.CapabilitySecrets)
 	secretEnv := []string{}
+	secretValues := make(map[string]string)
+	secretSources := make(map[string]string)
 
 	for _, p := range secretPlugins {
 		res, err := p.Execute("get_secrets", map[string]interface{}{
@@ -331,9 +334,34 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 		if secrets, ok := res.(map[string]string); ok {
 			for k, v := range secrets {
-				// Append as KEY=VALUE
-				secretEnv = append(secretEnv, fmt.Sprintf("%s=%s", k, v))
+				if _, exists := secretValues[k]; exists {
+					winner := secretSources[k]
+					logger.Warn("Duplicate secret key, skipping", "key", k, "winner", winner, "skipped", p.Name())
+					core.Publish(ctx, core.InternalEvent{
+						Type:   "notify_secret_conflict",
+						Source: "reconciler",
+						String: fmt.Sprintf("Secret %s already provided by %s; skipping %s", k, winner, p.Name()),
+						Details: map[string]interface{}{
+							"key":     k,
+							"winner":  winner,
+							"skipped": p.Name(),
+						},
+					})
+					continue
+				}
+				secretValues[k] = v
+				secretSources[k] = p.Name()
 			}
+		}
+	}
+	if len(secretValues) > 0 {
+		keys := make([]string, 0, len(secretValues))
+		for k := range secretValues {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			secretEnv = append(secretEnv, fmt.Sprintf("%s=%s", k, secretValues[k]))
 		}
 	}
 

@@ -8,4 +8,5 @@ const (
 	CapabilityAPI      Capability = "API"
 	CapabilityMCP      Capability = "MCP"
 	CapabilityTrigger  Capability = "Webhook"
+	CapabilitySecrets  Capability = "secrets"
 )
