@@ -21,4 +21,4 @@ Endpoints:
 - `GET /mcp/docs/`
 
 Docs:
-- `docs/` is embedded into the plugin at build time.
+- `docs/` is copied into `plugins/mcp/docs` during `make plugins` and embedded at build time.
