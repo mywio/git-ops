@@ -1,0 +1,28 @@
+core:
+  token: "ghp_123..."
+  users:
+    - "myuser"
+    - "myorg"
+  topic: "homelab-server-1"
+  target_dir: "./stacks"
+  interval: "5m"
+  dry_run: false
+  plugins_dir: "./plugins"
+
+pushover:
+  token: "push_token"
+  user: "push_user"
+
+webhook:
+  url: "https://example.com/notify"
+
+webhook_trigger:
+  port: "8082"
+  token: "webhook_token"
+
+mcp:
+  api_key: "mcp_token"
+  target_dir: "./stacks"
+
+google_secret_manager:
+  project_id: "my-gcp-project"
