@@ -299,8 +299,12 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		return
 	}
 
+	deployStart := time.Now()
+	r.publishDeployEvent(ctx, "deploy_start", repo, "starting", "", "", deployStart)
+
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		logger.Error("Failed to write docker-compose.yml", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		return
 	}
 
@@ -308,11 +312,13 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	err = r.fetchRepoHooks(ctx, *repo.Owner.Login, *repo.Name, "pre", repoLocalPath)
 	if err != nil {
 		logger.Error("Global Fetch Pre-Hook failed, aborting deploy", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		return
 	}
 	err = r.fetchRepoHooks(ctx, *repo.Owner.Login, *repo.Name, "post", repoLocalPath)
 	if err != nil {
 		logger.Error("Global Fetch Post-Hook failed, aborting deploy", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		return
 	}
 
@@ -329,6 +335,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		})
 		if err != nil {
 			logger.Error("Failed to fetch secrets from plugin, aborting deploy", "plugin", p.Name(), "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 			return
 		}
 
@@ -383,6 +390,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	if r.cfg.GlobalHooksDir != "" {
 		if err := utils.ExecuteHooks(filepath.Join(r.cfg.GlobalHooksDir, "pre"), hookEnv, logger); err != nil {
 			logger.Error("Global Pre-hook failed, aborting deploy", "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 			return
 		}
 	}
@@ -390,6 +398,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	// Run Repo PRE Hooks
 	if err := utils.ExecuteHooks(filepath.Join(repoLocalPath, ".deploy", "pre"), hookEnv, logger); err != nil {
 		logger.Error("Repo Pre-hook failed, aborting deploy", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		return
 	}
 
@@ -403,6 +412,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 	if err := cmd.Run(); err != nil {
 		logger.Error("Deploy failed", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		return
 	}
 
@@ -415,11 +425,33 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	if r.cfg.GlobalHooksDir != "" {
 		if err = utils.ExecuteHooks(filepath.Join(r.cfg.GlobalHooksDir, "post"), hookEnv, logger); err != nil {
 			logger.Error("Repo Post-hook execution failed", "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 			return
 		}
 	}
 
 	logger.Info("Deploy sequence complete")
+	r.publishDeployEvent(ctx, "deploy_success", repo, "success", "", time.Since(deployStart).String(), deployStart)
+}
+
+func (r *Reconciler) publishDeployEvent(ctx context.Context, eventType string, repo *github.Repository, status, message, duration string, start time.Time) {
+	if repo == nil || repo.Owner == nil || repo.Name == nil {
+		return
+	}
+	core.Publish(ctx, core.InternalEvent{
+		Type:   core.EventTypeName(eventType),
+		Source: "reconciler",
+		Repo:   *repo.Name,
+		String: message,
+		Details: map[string]interface{}{
+			"owner":      *repo.Owner.Login,
+			"repo":       *repo.Name,
+			"full_name":  fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name),
+			"status":     status,
+			"duration":   duration,
+			"started_at": start.Format(time.RFC3339),
+		},
+	})
 }
 
 // fetchRepoHooks downloads all scripts from .deploy/{stage} to the local repo dir
