@@ -18,6 +18,7 @@ type WebhookPlugin struct {
 	url    string
 	client *http.Client
 	enabled bool
+	subscriptions []string
 }
 
 type webhookConfig struct {
@@ -62,6 +63,7 @@ func (p *WebhookPlugin) Init(ctx context.Context, logger *slog.Logger, registry 
 		if !subscribeProvided {
 			subscribePatterns = []string{"notify_*"}
 		}
+		p.subscriptions = append([]string(nil), subscribePatterns...)
 		for _, pattern := range subscribePatterns {
 			registry.Subscribe(pattern, p.process)
 		}
@@ -122,6 +124,20 @@ func (p *WebhookPlugin) Execute(ctx context.Context, action string, params map[s
 }
 
 var Plugin core.Plugin = &WebhookPlugin{}
+
+type webhookConfigView struct {
+	URL       core.Secret `json:"url"`
+	Subscribe []string    `json:"subscribe,omitempty"`
+	Enabled   bool        `json:"enabled"`
+}
+
+func (p *WebhookPlugin) Config() any {
+	return webhookConfigView{
+		URL:       core.NewSecret(p.url),
+		Subscribe: append([]string(nil), p.subscriptions...),
+		Enabled:   p.enabled,
+	}
+}
 
 func (p *WebhookPlugin) process(ctx context.Context, event core.InternalEvent) {
 	if !p.enabled || p.url == "" {

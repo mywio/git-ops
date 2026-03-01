@@ -16,9 +16,10 @@ import (
 type PushoverNotifier struct {
 	logger  *slog.Logger
 	client  *http.Client
-	token   string
+	token   core.Secret
 	user    string
 	enabled bool
+	subscriptions []string
 }
 
 type pushoverConfig struct {
@@ -45,7 +46,7 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 			if err := core.DecodeConfigSection(section, &pushoverCfg); err != nil {
 				n.logger.WarnContext(ctx, "Invalid pushover config", "error", err)
 			}
-			n.token = pushoverCfg.Token
+			n.token = core.NewSecret(pushoverCfg.Token)
 			n.user = pushoverCfg.User
 			subscribePatterns = parseSubscribePatterns(section)
 		}
@@ -53,7 +54,7 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 	if n.client == nil {
 		n.client = http.DefaultClient
 	}
-	if n.token == "" || n.user == "" {
+	if n.token.Value == "" || n.user == "" {
 		n.logger.WarnContext(ctx, "Pushover token or user not set, notifications disabled")
 		n.enabled = false
 		return nil
@@ -65,6 +66,7 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 		if !subscribeProvided {
 			subscribePatterns = []string{"notify_*"}
 		}
+		n.subscriptions = append([]string(nil), subscribePatterns...)
 		for _, pattern := range subscribePatterns {
 			registry.Subscribe(pattern, n.process)
 		}
@@ -95,14 +97,14 @@ func (n *PushoverNotifier) Capabilities() []core.Capability {
 }
 
 func (n *PushoverNotifier) Status() core.ServiceStatus {
-	if n.enabled && n.token != "" && n.user != "" {
+	if n.enabled && n.token.Value != "" && n.user != "" {
 		return core.StatusHealthy
 	}
 	return core.StatusDegraded
 }
 
 func (n *PushoverNotifier) process(ctx context.Context, event core.InternalEvent) {
-	if !n.enabled || n.token == "" || n.user == "" {
+	if !n.enabled || n.token.Value == "" || n.user == "" {
 		return
 	}
 	if err := n.send(ctx, event); err != nil {
@@ -170,6 +172,22 @@ func (n *PushoverNotifier) Execute(ctx context.Context, action string, params ma
 // Exported symbol that core looks up
 var Plugin core.Plugin = &PushoverNotifier{}
 
+type pushoverConfigView struct {
+	Token     core.Secret `json:"token"`
+	User      string      `json:"user"`
+	Subscribe []string    `json:"subscribe,omitempty"`
+	Enabled   bool        `json:"enabled"`
+}
+
+func (n *PushoverNotifier) Config() any {
+	return pushoverConfigView{
+		Token:     n.token,
+		User:      n.user,
+		Subscribe: append([]string(nil), n.subscriptions...),
+		Enabled:   n.enabled,
+	}
+}
+
 func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -180,7 +198,7 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 	}
 
 	payload := map[string]interface{}{
-		"token":   n.token,
+		"token":   n.token.Value,
 		"user":    n.user,
 		"message": fmt.Sprintf("[%s] %s\nRepo: %s/%s\n%s", event.Type, event.String, event.Source, event.Repo, string(details)),
 		"title":   "git-ops Notification",

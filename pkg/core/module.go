@@ -18,6 +18,7 @@ import (
 type PluginRegistry interface {
 	GetPlugin(name string) (Plugin, error)
 	GetPluginsWithCapability(cap Capability) []Plugin
+	ListPlugins() []Plugin
 	RegisterEventType(desc EventTypeDesc) error
 	GetMuxServer() *http.ServeMux
 	Subscribe(pattern string, handler Listener)
@@ -42,6 +43,12 @@ type Plugin interface {
 	Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error)
 }
 
+// ConfigProvider allows plugins to expose a UI-safe view of their configuration.
+// Use core.Secret for any sensitive values to avoid leaking secrets.
+type ConfigProvider interface {
+	Config() any
+}
+
 type ModuleManager struct {
 	modules []Module
 	logger  *slog.Logger
@@ -51,6 +58,7 @@ type ModuleManager struct {
 	httpClient *http.Client
 	configMu   sync.RWMutex
 	config     map[string]map[string]any
+	serverOnce sync.Once
 }
 
 func (m *ModuleManager) RegisterEventType(desc EventTypeDesc) error {
@@ -63,7 +71,7 @@ func (m *ModuleManager) GetMuxServer() *http.ServeMux {
 
 // NewModuleManager creates a new ModuleManager instance.
 func NewModuleManager(logger *slog.Logger) *ModuleManager {
-	return &ModuleManager{
+	mgr := &ModuleManager{
 		modules: []Module{},
 		logger:  logger,
 		mux:     http.NewServeMux(),
@@ -72,6 +80,8 @@ func NewModuleManager(logger *slog.Logger) *ModuleManager {
 		},
 		config: map[string]map[string]any{},
 	}
+	mgr.registerCoreRoutes()
+	return mgr
 }
 
 func (m *ModuleManager) Subscribe(pattern string, handler Listener) {
@@ -138,6 +148,17 @@ func (m *ModuleManager) GetPluginsWithCapability(cap Capability) []Plugin {
 	return results
 }
 
+// ListPlugins returns all registered plugins in registration order.
+func (m *ModuleManager) ListPlugins() []Plugin {
+	results := make([]Plugin, 0, len(m.modules))
+	for _, mod := range m.modules {
+		if plug, ok := mod.(Plugin); ok {
+			results = append(results, plug)
+		}
+	}
+	return results
+}
+
 // LoadPlugins loads plugins from a directory and registers them with the module manager.
 func (m *ModuleManager) LoadPlugins(dir string) error {
 	entries, err := os.ReadDir(dir)
@@ -196,6 +217,7 @@ func (m *ModuleManager) Init(ctx context.Context) error {
 
 // Start starts all modules in the manager.
 func (m *ModuleManager) Start(ctx context.Context) {
+	m.startHTTPServer()
 	for _, mod := range m.modules {
 		go func(mod Module) {
 			m.logger.Info("Starting module", "module", mod.Name())
@@ -213,6 +235,11 @@ func (m *ModuleManager) Stop(ctx context.Context) {
 		m.logger.Info("Stopping module", "module", mod.Name())
 		if err := mod.Stop(ctx); err != nil {
 			m.logger.Error("Error stopping module", "module", mod.Name(), "error", err)
+		}
+	}
+	if m.server != nil {
+		if err := m.server.Shutdown(ctx); err != nil {
+			m.logger.Error("HTTP server shutdown failed", "error", err)
 		}
 	}
 }

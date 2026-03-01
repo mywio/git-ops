@@ -37,3 +37,11 @@ Use `registry.GetConfig()` for configuration and `core.DecodeConfigSection` to
 decode a section into a struct.
 
 Build plugins with `go build -buildmode=plugin`.
+
+## Core Plugin API
+If `core.http_addr` / `CORE_HTTP_ADDR` is set, core exposes:
+- `GET /api/plugins` (list plugins; `include_config=true` to include config)
+- `GET /api/plugins/{name}` (plugin details with config if available)
+
+Plugins can optionally implement `core.ConfigProvider` to expose a UI-safe config view.
+Use `core.Secret` for sensitive fields.

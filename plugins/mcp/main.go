@@ -147,6 +147,20 @@ func (p *MCPPlugin) Execute(ctx context.Context, action string, params map[strin
 	return nil, errors.New("execute not supported for MCP plugin")
 }
 
+type mcpConfigView struct {
+	TargetDir   string      `json:"target_dir"`
+	APIKey      core.Secret `json:"api_key"`
+	AuthEnabled bool        `json:"auth_enabled"`
+}
+
+func (p *MCPPlugin) Config() any {
+	return mcpConfigView{
+		TargetDir:   p.targetDir,
+		APIKey:      core.NewSecret(p.apiKey),
+		AuthEnabled: p.apiKey != "",
+	}
+}
+
 // Auth middleware
 func authMiddleware(key string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
