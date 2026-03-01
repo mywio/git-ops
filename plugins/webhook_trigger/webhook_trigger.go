@@ -161,6 +161,22 @@ func (p *WebhookTriggerPlugin) handleReconcile(w http.ResponseWriter, r *http.Re
 // Exported symbol that core looks up
 var Plugin core.Plugin = &WebhookTriggerPlugin{}
 
+type webhookTriggerConfigView struct {
+	Port     string      `json:"port"`
+	Token    core.Secret `json:"token"`
+	Secured  bool        `json:"secured"`
+	Enabled  bool        `json:"enabled"`
+}
+
+func (p *WebhookTriggerPlugin) Config() any {
+	return webhookTriggerConfigView{
+		Port:    p.port,
+		Token:   core.NewSecret(p.token),
+		Secured: p.token != "",
+		Enabled: p.port != "",
+	}
+}
+
 // Main for standalone testing
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

@@ -88,6 +88,7 @@ func LoadConfigMapFromEnv() ConfigMap {
 			"global_hooks_dir": os.Getenv("GLOBAL_HOOKS_DIR"),
 			"secrets_dir":      os.Getenv("SECRETS_DIR"),
 			"plugins_dir":      os.Getenv("PLUGINS_DIR"),
+			"http_addr":        os.Getenv("CORE_HTTP_ADDR"),
 		},
 		"pushover": {
 			"token": os.Getenv("NOTIFY_PUSHOVER_TOKEN"),

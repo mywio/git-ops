@@ -157,3 +157,15 @@ func (p *SecretManagerPlugin) Execute(ctx context.Context, action string, params
 
 	return secrets, nil
 }
+
+type secretManagerConfigView struct {
+	ProjectID string `json:"project_id"`
+	Enabled   bool   `json:"enabled"`
+}
+
+func (p *SecretManagerPlugin) Config() any {
+	return secretManagerConfigView{
+		ProjectID: p.projectID,
+		Enabled:   p.client != nil,
+	}
+}

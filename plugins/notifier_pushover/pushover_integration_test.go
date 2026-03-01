@@ -28,7 +28,7 @@ func TestPushoverIntegration_FromEnv(t *testing.T) {
 	err := p.Init(context.Background(), logger, mgr)
 	assert.NoError(t, err)
 	assert.True(t, p.enabled)
-	assert.Equal(t, token, p.token)
+	assert.Equal(t, token, p.token.Value)
 	assert.Equal(t, user, p.user)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -135,6 +135,20 @@ func (p *EnvForwarderPlugin) Execute(ctx context.Context, action string, params 
 	return secrets, nil
 }
 
+type envForwarderConfigView struct {
+	Keys     []string `json:"keys,omitempty"`
+	Prefixes []string `json:"prefixes,omitempty"`
+	Enabled  bool     `json:"enabled"`
+}
+
+func (p *EnvForwarderPlugin) Config() any {
+	return envForwarderConfigView{
+		Keys:     append([]string(nil), p.keys...),
+		Prefixes: append([]string(nil), p.prefixes...),
+		Enabled:  p.enabled,
+	}
+}
+
 func normalizeList(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := map[string]struct{}{}

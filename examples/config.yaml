@@ -8,6 +8,7 @@ core:
   interval: "5m"
   dry_run: false
   plugins_dir: "./plugins"
+  http_addr: "127.0.0.1:8080"
 
 pushover:
   token: "push_token"
