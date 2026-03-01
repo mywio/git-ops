@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
@@ -24,22 +25,29 @@ type pushoverConfig struct {
 	Token string `yaml:"token"`
 	User  string `yaml:"user"`
 }
+
 func (n *PushoverNotifier) Name() string {
 	return "pushover"
 }
 
 func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	n.logger = logger
+	var subscribeProvided bool
+	var subscribePatterns []string
 	if registry != nil {
 		n.client = registry.GetHTTPClient()
 		cfg := registry.GetConfig()
 		if section, ok := cfg["pushover"]; ok {
-			var pcfg pushoverConfig
-			if err := core.DecodeConfigSection(section, &pcfg); err != nil {
+			if _, okSub := section["subscribe"]; okSub {
+				subscribeProvided = true
+			}
+			var pushoverCfg pushoverConfig
+			if err := core.DecodeConfigSection(section, &pushoverCfg); err != nil {
 				n.logger.WarnContext(ctx, "Invalid pushover config", "error", err)
 			}
-			n.token = pcfg.Token
-			n.user = pcfg.User
+			n.token = pushoverCfg.Token
+			n.user = pushoverCfg.User
+			subscribePatterns = parseSubscribePatterns(section)
 		}
 	}
 	if n.client == nil {
@@ -53,10 +61,16 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 	n.enabled = true
 	n.logger.InfoContext(ctx, "Pushover Notifier Initialized")
 
-	// TODO: move this to config?
-	// We want to register to all notifications
 	if registry != nil {
-		registry.Subscribe("notify_*", n.process)
+		if !subscribeProvided {
+			subscribePatterns = []string{"notify_*"}
+		}
+		for _, pattern := range subscribePatterns {
+			registry.Subscribe(pattern, n.process)
+		}
+		if len(subscribePatterns) == 0 {
+			n.logger.InfoContext(ctx, "Pushover notifier has no subscriptions configured; skipping event registration")
+		}
 	}
 
 	return nil
@@ -91,55 +105,12 @@ func (n *PushoverNotifier) process(ctx context.Context, event core.InternalEvent
 	if !n.enabled || n.token == "" || n.user == "" {
 		return
 	}
-	details, err := json.Marshal(event.Details) // Assuming Details is map[string]interface{}
-	if err != nil {
-		n.logger.ErrorContext(ctx, "Failed to marshal event details",
-			slog.Any("event", event))
-		return
-	}
-
-	payload := map[string]interface{}{
-		"token":   n.token,
-		"user":    n.user,
-		"message": fmt.Sprintf("[%s] %s\nRepo: %s/%s\n%s", event.Type, event.String, event.Source, event.Repo, string(details)),
-		"title":   "git-ops Notification",
-		// TODO: Have a priority map in config. That will map notification types to priority levels.
-		//"priority": ,
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		n.logger.ErrorContext(ctx, "Failed to marshal payload",
-			slog.Any("event", event),
-			slog.Any("payload", payload),
-		)
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.pushover.net/1/messages.json", bytes.NewBuffer(data))
-	if err != nil {
-		n.logger.ErrorContext(ctx, "Failed to create Pushover request", "error", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := n.client.Do(req)
-	if err != nil {
+	if err := n.send(ctx, event); err != nil {
 		n.logger.ErrorContext(ctx, "Failed to send Pushover notification", "error", err)
-		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		n.logger.ErrorContext(ctx, "Pushover API error", "status", resp.StatusCode)
-		return
-	}
-
-	n.logger.InfoContext(ctx, "Pushover notification delivered successfully")
-	return
 }
 
-func (n *PushoverNotifier) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (n *PushoverNotifier) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	//if n.token == "" || n.user == "" {
 	//	slog.Debug("Pushover token or user not set, skipping notification")
 	//	return nil, nil // silent skip if not set
@@ -199,6 +170,88 @@ func (n *PushoverNotifier) Execute(action string, params map[string]interface{})
 // Exported symbol that core looks up
 var Plugin core.Plugin = &PushoverNotifier{}
 
+func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	details, err := json.Marshal(event.Details) // Assuming Details is map[string]interface{}
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]interface{}{
+		"token":   n.token,
+		"user":    n.user,
+		"message": fmt.Sprintf("[%s] %s\nRepo: %s/%s\n%s", event.Type, event.String, event.Source, event.Repo, string(details)),
+		"title":   "git-ops Notification",
+		// TODO: Have a priority map in config. That will map notification types to priority levels.
+		//"priority": ,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.pushover.net/1/messages.json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("pushover API error: %d", resp.StatusCode)
+	}
+
+	n.logger.InfoContext(ctx, "Pushover notification delivered successfully")
+	return nil
+}
+
+func normalizePatterns(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func parseSubscribePatterns(section map[string]any) []string {
+	raw, ok := section["subscribe"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return normalizePatterns(v)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, fmt.Sprint(item))
+		}
+		return normalizePatterns(out)
+	case string:
+		parts := strings.Split(v, ",")
+		return normalizePatterns(parts)
+	default:
+		return normalizePatterns([]string{fmt.Sprint(v)})
+	}
+}
+
 // TODO: fix me after the refactor
 // Main for standalone testing
 //func main() {
@@ -223,7 +276,7 @@ var Plugin core.Plugin = &PushoverNotifier{}
 //	//	Details: map[string]interface{}{"key": "value"},
 //	//}
 //	params := map[string]interface{}{"event": event}
-//	result, err := n.Execute("notify", params)
+//	result, err := n.Execute(ctx, "notify", params)
 //	if err != nil {
 //		logger.Error("Execute failed", "error", err)
 //	} else {

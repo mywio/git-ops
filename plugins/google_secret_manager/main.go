@@ -22,6 +22,7 @@ type secretManagerConfig struct {
 	ProjectID string `yaml:"project_id"`
 	Project   string `yaml:"project"`
 }
+
 var Plugin = &SecretManagerPlugin{}
 
 func (p *SecretManagerPlugin) Name() string {
@@ -84,9 +85,12 @@ func (p *SecretManagerPlugin) Status() core.ServiceStatus {
 	return core.StatusHealthy
 }
 
-func (p *SecretManagerPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (p *SecretManagerPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	if action != "get_secrets" {
 		return nil, fmt.Errorf("unknown action: %s", action)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	owner, _ := params["owner"].(string)
@@ -110,7 +114,7 @@ func (p *SecretManagerPlugin) Execute(action string, params map[string]interface
 		Filter: filter,
 	}
 
-	it := p.client.ListSecrets(context.Background(), req)
+	it := p.client.ListSecrets(ctx, req)
 	secrets := make(map[string]string)
 
 	for {
@@ -130,7 +134,7 @@ func (p *SecretManagerPlugin) Execute(action string, params map[string]interface
 			Name: versionName,
 		}
 
-		result, err := p.client.AccessSecretVersion(context.Background(), accessReq)
+		result, err := p.client.AccessSecretVersion(ctx, accessReq)
 		if err != nil {
 			p.logger.Error("Failed to access secret version", "secret", resp.Name, "error", err)
 			continue

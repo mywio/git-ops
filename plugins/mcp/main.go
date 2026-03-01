@@ -142,7 +142,7 @@ func (p *MCPPlugin) Status() core.ServiceStatus {
 }
 
 // Execute executes an action with parameters
-func (p *MCPPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (p *MCPPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	// This plugin is HTTP-based, so Execute might not be applicable; return not supported
 	return nil, errors.New("execute not supported for MCP plugin")
 }

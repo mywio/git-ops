@@ -27,7 +27,7 @@ func TestEnvForwarderPlugin_AllowsKeysAndPrefixes(t *testing.T) {
 	err := p.Init(context.Background(), logger, mgr)
 	assert.NoError(t, err)
 
-	res, err := p.Execute("get_secrets", map[string]interface{}{})
+	res, err := p.Execute(context.Background(), "get_secrets", map[string]interface{}{})
 	assert.NoError(t, err)
 
 	secrets, ok := res.(map[string]string)
@@ -46,7 +46,7 @@ func TestEnvForwarderPlugin_DisabledWithoutConfig(t *testing.T) {
 	err := p.Init(context.Background(), logger, mgr)
 	assert.NoError(t, err)
 
-	res, err := p.Execute("get_secrets", map[string]interface{}{})
+	res, err := p.Execute(context.Background(), "get_secrets", map[string]interface{}{})
 	assert.NoError(t, err)
 
 	secrets, ok := res.(map[string]string)
@@ -60,6 +60,6 @@ func TestEnvForwarderPlugin_UnknownAction(t *testing.T) {
 	err := p.Init(context.Background(), logger, nil)
 	assert.NoError(t, err)
 
-	_, err = p.Execute("nope", map[string]interface{}{})
+	_, err = p.Execute(context.Background(), "nope", map[string]interface{}{})
 	assert.Error(t, err)
 }

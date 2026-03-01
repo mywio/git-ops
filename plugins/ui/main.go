@@ -48,6 +48,6 @@ func (p *UIPlugin) Status() core.ServiceStatus {
 	return core.StatusHealthy
 }
 
-func (p *UIPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (p *UIPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	return nil, nil
 }

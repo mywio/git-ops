@@ -12,9 +12,13 @@ core:
 pushover:
   token: "push_token"
   user: "push_user"
+  subscribe:
+    - "notify_*"
 
 webhook:
   url: "https://example.com/notify"
+  subscribe:
+    - "deploy_*"
 
 webhook_trigger:
   port: "8082"
