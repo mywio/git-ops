@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/mywio/git-ops/pkg/core"
@@ -25,6 +26,7 @@ type webhookTriggerConfig struct {
 	Port  string `yaml:"port"`
 	Token string `yaml:"token"`
 }
+
 func (p *WebhookTriggerPlugin) Name() string {
 	return "webhook_trigger"
 }
