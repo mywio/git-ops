@@ -39,7 +39,7 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 		if section, ok := cfg["webhook_trigger"]; ok {
 			var wcfg webhookTriggerConfig
 			if err := core.DecodeConfigSection(section, &wcfg); err != nil {
-				p.logger.Warn("Invalid webhook_trigger config", "error", err)
+				p.logger.WarnContext(ctx, "Invalid webhook_trigger config", "error", err)
 			}
 			p.port = wcfg.Port
 			p.token = wcfg.Token
@@ -50,9 +50,9 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 	}
 
 	if p.token == "" {
-		p.logger.Warn("WEBHOOK_TOKEN not set, endpoint is unsecured (use with caution)")
+		p.logger.WarnContext(ctx, "WEBHOOK_TOKEN not set, endpoint is unsecured (use with caution)")
 	} else {
-		p.logger.Info("Webhook Trigger Plugin Initialized", "port", p.port, "secured", true)
+		p.logger.InfoContext(ctx, "Webhook Trigger Plugin Initialized", "port", p.port, "secured", true)
 	}
 
 	if registry != nil {
@@ -77,10 +77,10 @@ func (p *WebhookTriggerPlugin) Start(_ context.Context) error {
 func (p *WebhookTriggerPlugin) Stop(ctx context.Context) error {
 	if p.server != nil {
 		if err := p.server.Shutdown(ctx); err != nil {
-			p.logger.Error("Webhook server shutdown failed", "error", err)
+			p.logger.ErrorContext(ctx, "Webhook server shutdown failed", "error", err)
 			return err
 		}
-		p.logger.Info("Webhook Trigger server stopped")
+		p.logger.InfoContext(ctx, "Webhook Trigger server stopped")
 	}
 	return nil
 }
@@ -91,7 +91,7 @@ func (p *WebhookTriggerPlugin) Description() string {
 
 func (p *WebhookTriggerPlugin) Capabilities() []core.Capability {
 	// Assuming core defines CapabilityTrigger or similar
-	return []core.Capability{core.Capability("trigger")}
+	return []core.Capability{core.CapabilityTrigger}
 }
 
 func (p *WebhookTriggerPlugin) Status() core.ServiceStatus {
