@@ -21,7 +21,6 @@ plugins:
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_webhook.so plugins/notifier_webhook/notifier_webhook.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/webhook_trigger.go
-	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifications.so plugins/notifications/main.go
 
 clean:
 	rm -rf $(BUILD_DIR)
