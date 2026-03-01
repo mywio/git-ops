@@ -90,7 +90,6 @@ func (p *WebhookTriggerPlugin) Description() string {
 }
 
 func (p *WebhookTriggerPlugin) Capabilities() []core.Capability {
-	// Assuming core defines CapabilityTrigger or similar
 	return []core.Capability{core.CapabilityTrigger}
 }
 
@@ -104,7 +103,7 @@ func (p *WebhookTriggerPlugin) Status() core.ServiceStatus {
 	return core.StatusHealthy
 }
 
-func (p *WebhookTriggerPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (p *WebhookTriggerPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	return nil, fmt.Errorf("webhook_trigger plugin does not support Execute actions (use HTTP endpoint)")
 }
 

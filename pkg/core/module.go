@@ -39,7 +39,7 @@ type Plugin interface {
 	Capabilities() []Capability
 	Status() ServiceStatus
 	// Execute provides a generic entry point for plugin actions
-	Execute(action string, params map[string]interface{}) (interface{}, error)
+	Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error)
 }
 
 type ModuleManager struct {

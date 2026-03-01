@@ -26,8 +26,10 @@ Plugins must implement the `Plugin` interface defined in `pkg/core/module.go`.
 ```go
 type Plugin interface {
     Module
+    Description() string
     Capabilities() []Capability
     Status() ServiceStatus
+    Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error)
 }
 ```
 

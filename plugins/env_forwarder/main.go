@@ -77,7 +77,10 @@ func (p *EnvForwarderPlugin) Status() core.ServiceStatus {
 	return core.StatusDegraded
 }
 
-func (p *EnvForwarderPlugin) Execute(action string, params map[string]interface{}) (interface{}, error) {
+func (p *EnvForwarderPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if action != "get_secrets" {
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
@@ -94,7 +97,7 @@ func (p *EnvForwarderPlugin) Execute(action string, params map[string]interface{
 		value, ok := os.LookupEnv(key)
 		if !ok {
 			p.logger.Warn("Env var not set", "key", key)
-			core.Publish(context.Background(), core.InternalEvent{
+			core.Publish(ctx, core.InternalEvent{
 				Type:   "notify_env_forwarder_missing",
 				Source: "env_forwarder",
 				String: fmt.Sprintf("Env var %s not set", key),

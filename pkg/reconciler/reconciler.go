@@ -329,7 +329,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	secretSources := make(map[string]string)
 
 	for _, p := range secretPlugins {
-		res, err := p.Execute("get_secrets", map[string]interface{}{
+		res, err := p.Execute(ctx, "get_secrets", map[string]interface{}{
 			"owner": *repo.Owner.Login,
 			"repo":  *repo.Name,
 		})

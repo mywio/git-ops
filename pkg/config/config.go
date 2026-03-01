@@ -77,7 +77,7 @@ func LoadConfigFile(path string) (ConfigMap, error) {
 // LoadConfigMapFromEnv builds a sectioned config map from environment variables.
 // This allows config-file values to override env values without losing defaults.
 func LoadConfigMapFromEnv() ConfigMap {
-	return ConfigMap{
+	cfg := ConfigMap{
 		"core": {
 			"token":            os.Getenv("GITHUB_TOKEN"),
 			"users":            os.Getenv("GITHUB_USERS"),
@@ -108,6 +108,13 @@ func LoadConfigMapFromEnv() ConfigMap {
 			"project_id": os.Getenv("GOOGLE_CLOUD_PROJECT"),
 		},
 	}
+	if v := os.Getenv("NOTIFY_PUSHOVER_EVENTS"); v != "" {
+		cfg["pushover"]["subscribe"] = v
+	}
+	if v := os.Getenv("NOTIFY_WEBHOOK_EVENTS"); v != "" {
+		cfg["webhook"]["subscribe"] = v
+	}
+	return cfg
 }
 
 // LoadConfigFromMap builds a core Config from a map.
