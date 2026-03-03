@@ -55,12 +55,21 @@ func (r *Reconciler) Status() core.ServiceStatus {
 
 func (r *Reconciler) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	switch action {
-	case "reconcile_now":
+	case "reconcile_stack":
+		owner, okOwner := params["owner"].(string)
+		repo, okRepo := params["repo"].(string)
+		if !okOwner || !okRepo || owner == "" || repo == "" {
+			return nil, fmt.Errorf("reconcile_stack requires 'owner' and 'repo' string parameters")
+		}
+
+		forceType, _ := params["force_type"].(string)
+
 		triggerCtx := context.Background()
 		if ctx != nil {
 			triggerCtx = ctx
 		}
-		go r.runReconcile(triggerCtx)
+
+		go r.runReconcileStack(triggerCtx, owner, repo, forceType)
 		return true, nil
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
@@ -74,6 +83,19 @@ func (r *Reconciler) Config() any {
 func (r *Reconciler) handleReconcileNowEvent(ctx context.Context, event core.InternalEvent) {
 	r.logger.Info("Received reconcile_now event, triggering reconciliation", "source", event.Source)
 	go r.runReconcile(ctx)
+}
+
+func (r *Reconciler) handleReconcileStackEvent(ctx context.Context, event core.InternalEvent) {
+	owner, okOwner := event.Details["owner"].(string)
+	repo, okRepo := event.Details["repo"].(string)
+	if !okOwner || !okRepo {
+		r.logger.Warn("reconcile_stack event missing owner or repo details", "source", event.Source)
+		return
+	}
+	forceType, _ := event.Details["force_type"].(string)
+
+	r.logger.Info("Received reconcile_stack event", "source", event.Source, "owner", owner, "repo", repo, "force_type", forceType)
+	go r.runReconcileStack(ctx, owner, repo, forceType)
 }
 
 func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
@@ -100,6 +122,15 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 			Description: "Request an immediate full reconciliation",
 			PayloadSpec: map[string]core.PayloadField{
 				"force": {Type: "bool", Description: "Force even if locked", Required: false},
+			},
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "reconcile_stack",
+			Description: "Request reconciliation for a specific stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":      {Type: "string", Description: "Repository owner", Required: true},
+				"repo":       {Type: "string", Description: "Repository name", Required: true},
+				"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
 			},
 		})
 		registry.RegisterEventType(core.EventTypeDesc{
@@ -131,6 +162,7 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 		})
 
 		registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
+		registry.Subscribe("reconcile_stack", r.handleReconcileStackEvent)
 	}
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: r.cfg.Token})
@@ -249,8 +281,34 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 			r.logger.Warn("Repo found in both Desired and Removal state, skipping deploy", "repo", fullName)
 			continue
 		}
-		r.deployRepo(ctx, fullName, repo)
+		r.deployRepo(ctx, fullName, repo, "")
 	}
+}
+
+func (r *Reconciler) runReconcileStack(ctx context.Context, owner, repo, forceType string) {
+	r.wg.Add(1)
+	defer r.wg.Done()
+
+	fullName := fmt.Sprintf("%s/%s", owner, repo)
+
+	// Query to check if the specific repo is marked for gitops
+	queryDesired := fmt.Sprintf("repo:%s topic:%s archived:false", fullName, r.cfg.Topic)
+	desiredState := make(map[string]*github.Repository)
+	r.fetchReposInto(ctx, queryDesired, desiredState)
+
+	if len(desiredState) == 0 {
+		r.logger.Warn("Stack not found or not tagged for git-ops, cannot reconcile", "owner", owner, "repo", repo)
+		return
+	}
+
+	repository := desiredState[fullName]
+	if repository == nil {
+		r.logger.Warn("Stack not found in query results", "owner", owner, "repo", repo)
+		return
+	}
+
+	r.logger.Info("Targeted stack reconciliation initiated", "service", fullName, "force_type", forceType)
+	r.deployRepo(ctx, fullName, repository, forceType)
 }
 
 func (r *Reconciler) fetchReposInto(ctx context.Context, query string, target map[string]*github.Repository) {
@@ -335,7 +393,7 @@ func (r *Reconciler) pruneService(path string) {
 	}
 }
 
-func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *github.Repository) {
+func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *github.Repository, forceType string) {
 	logger := r.logger.With("service", fullName)
 
 	// Fetch docker-compose.yml
@@ -358,24 +416,45 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 	repoLocalPath := filepath.Join(r.cfg.TargetDir, *repo.Owner.Login, *repo.Name)
 	filePath := filepath.Join(repoLocalPath, "docker-compose.yml")
 
+	if forceType == "clean_local_state" {
+		logger.Info("Cleaning local state before deploy", "force_type", forceType)
+		if !r.cfg.DryRun {
+			os.Remove(filePath)
+			os.RemoveAll(filepath.Join(repoLocalPath, ".deploy"))
+		}
+	} else if forceType == "remove_images" {
+		logger.Info("Removing local images before deploy", "force_type", forceType)
+		if !r.cfg.DryRun {
+			// Try to bring it down and remove images
+			cmd := exec.Command("docker", "compose", "down", "--rmi", "all", "--remove-orphans")
+			cmd.Dir = repoLocalPath
+			cmd.Run() // Ignore error in case it's already down
+		}
+	} else if forceType == "restart_only" {
+		logger.Info("Restarting stack containers", "force_type", forceType)
+		if !r.cfg.DryRun {
+			cmd := exec.Command("docker", "compose", "restart")
+			cmd.Dir = repoLocalPath
+			if err := cmd.Run(); err != nil {
+				logger.Error("Restart failed", "error", err)
+			}
+		}
+		return // Do not process file changes
+	}
+
 	if !r.cfg.DryRun {
 		os.MkdirAll(repoLocalPath, 0755)
 	}
 
 	// Change Detection
 	existing, _ := os.ReadFile(filePath)
-	if string(existing) == content {
-		// Even if file didn't change, we might need to redeploy if secrets changed?
-		// But for now, we follow the "file change" trigger.
-		// However, if the user manually restarted, or if secrets rotated, we might miss it.
-		// For this task, we stick to file change detection as primary trigger,
-		// OR we can force update if we assume secrets might have changed.
-		// The prompt didn't strictly say "always deploy".
-		// But to be safe with secrets, maybe we should just return if no file change?
-		// No, usually you want to redeploy if secrets update.
-		// But we don't know if secrets updated.
-		// Let's stick to file change for now to avoid restart loops.
+	if string(existing) == content && forceType == "" {
+		// No force type specified and no changes detected
 		return
+	}
+
+	if forceType != "" {
+		logger.Info("Bypassing file change check due to force type", "force_type", forceType)
 	}
 
 	logger.Info("Updating deployment")
