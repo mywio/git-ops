@@ -36,6 +36,19 @@ func TestEnvForwarderPlugin_AllowsKeysAndPrefixes(t *testing.T) {
 	assert.Equal(t, "abc123", secrets["APP_TOKEN"])
 	_, exists := secrets["MISSING"]
 	assert.False(t, exists)
+
+	statsRes, err := p.Execute(context.Background(), "get_stats", map[string]interface{}{})
+	assert.NoError(t, err)
+	stats, ok := statsRes.(envForwarderStatsView)
+	assert.True(t, ok)
+	assert.Equal(t, 2, stats.ConfiguredKeys)
+	assert.Equal(t, 1, stats.ConfiguredPrefixes)
+	assert.Equal(t, 2, stats.ForwardedTotal)
+	assert.Equal(t, 1, stats.ForwardedFromKeys)
+	assert.Equal(t, 1, stats.ForwardedFromPrefixes)
+	assert.Equal(t, 1, stats.PrefixMatches["APP_"])
+	assert.Equal(t, 1, stats.PrefixForwarded["APP_"])
+	assert.Contains(t, stats.MissingKeys, "MISSING")
 }
 
 func TestEnvForwarderPlugin_DisabledWithoutConfig(t *testing.T) {

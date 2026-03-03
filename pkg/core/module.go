@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"plugin"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -193,8 +194,8 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 			continue
 		}
 
-		plug, ok := sym.(Plugin)
-		if !ok {
+		plug, ok := resolvePluginSymbol(sym)
+		if !ok || plug == nil {
 			m.logger.Error("Plugin has wrong type (must implement core.Plugin)", "path", path)
 			continue
 		}
@@ -203,6 +204,44 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 		m.logger.Info("Plugin loaded successfully", "name", plug.Name())
 	}
 	return nil
+}
+
+func resolvePluginSymbol(sym any) (Plugin, bool) {
+	if plug, ok := sym.(Plugin); ok {
+		return plug, true
+	}
+	if plugPtr, ok := sym.(*Plugin); ok {
+		if plugPtr == nil || *plugPtr == nil {
+			return nil, false
+		}
+		return *plugPtr, true
+	}
+
+	// plugin.Lookup returns a pointer to the exported variable. Unwrap pointers
+	// until we find a value that implements Plugin.
+	val := reflect.ValueOf(sym)
+	for val.IsValid() && val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil, false
+		}
+		val = val.Elem()
+		if !val.IsValid() {
+			return nil, false
+		}
+		if val.CanInterface() {
+			if plug, ok := val.Interface().(Plugin); ok {
+				return plug, true
+			}
+		}
+	}
+
+	if val.IsValid() && val.CanInterface() {
+		if plug, ok := val.Interface().(Plugin); ok {
+			return plug, true
+		}
+	}
+
+	return nil, false
 }
 
 // Init initializes all modules in the manager.

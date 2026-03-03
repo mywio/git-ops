@@ -47,6 +47,7 @@ git-ops supports dynamically loaded plugins. By default, it looks for `.so` file
 Available plugins:
 - **Google Secret Manager**: Injects secrets from GSM into deployments.
 - **Env Forwarder**: Forwards allowlisted environment variables into docker compose.
+- **File Forwarder**: Forwards allowlisted host files as runtime file paths into docker compose.
 - **MCP**: AI Context integration (Model Context Protocol).
 - **UI**: Web Dashboard.
 - **Notifications**: Pushover/Webhook alerts.

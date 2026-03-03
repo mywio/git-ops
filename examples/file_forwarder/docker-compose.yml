@@ -1,0 +1,6 @@
+services:
+  app:
+    image: alpine:3.20
+    command: ["sh", "-lc", "ls -l ${TLS_CERT_FILE} && sleep 3600"]
+    volumes:
+      - "${TLS_CERT_FILE}:/run/secrets/tls.crt:ro"

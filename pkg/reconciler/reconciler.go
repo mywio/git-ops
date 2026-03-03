@@ -372,6 +372,25 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 		}
 	}
 
+	runtimeFiles, err := r.collectRuntimeFiles(ctx, *repo.Owner.Login, *repo.Name, logger, secretSources)
+	if err != nil {
+		logger.Error("Failed to collect runtime files from plugin, aborting deploy", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
+		return
+	}
+
+	runtimeFileEnv := []string{}
+	cleanupRuntimeFiles := func() {}
+	if len(runtimeFiles) > 0 {
+		runtimeFileEnv, cleanupRuntimeFiles, err = materializeRuntimeFiles(runtimeFiles)
+		if err != nil {
+			logger.Error("Failed to materialize runtime files, aborting deploy", "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
+			return
+		}
+		defer cleanupRuntimeFiles()
+	}
+
 	// Prepare Env for Hooks (Pass service context)
 	hookEnv := []string{
 		fmt.Sprintf("REPO_NAME=%s", *repo.Name),
@@ -409,6 +428,7 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 	// Inject Secrets + Standard Env
 	cmd.Env = append(os.Environ(), secretEnv...)
+	cmd.Env = append(cmd.Env, runtimeFileEnv...)
 
 	if err := cmd.Run(); err != nil {
 		logger.Error("Deploy failed", "error", err)
@@ -432,6 +452,111 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 	logger.Info("Deploy sequence complete")
 	r.publishDeployEvent(ctx, "deploy_success", repo, "success", "", time.Since(deployStart).String(), deployStart)
+}
+
+func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string, logger *slog.Logger, existingSources map[string]string) ([]core.RuntimeFile, error) {
+	runtimePlugins := r.registry.GetPluginsWithCapability(core.CapabilityRuntimeFiles)
+	files := make([]core.RuntimeFile, 0)
+	runtimeSources := make(map[string]string)
+
+	for _, p := range runtimePlugins {
+		res, err := p.Execute(ctx, "get_runtime_files", map[string]interface{}{
+			"owner": owner,
+			"repo":  repo,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("plugin %s: %w", p.Name(), err)
+		}
+
+		runtimeFiles, ok := res.([]core.RuntimeFile)
+		if !ok {
+			return nil, fmt.Errorf("plugin %s returned unexpected runtime file payload", p.Name())
+		}
+
+		for _, file := range runtimeFiles {
+			key := strings.TrimSpace(file.EnvKey)
+			if key == "" {
+				return nil, fmt.Errorf("plugin %s returned runtime file with empty env key", p.Name())
+			}
+			if strings.Contains(key, "=") {
+				return nil, fmt.Errorf("plugin %s returned invalid env key %q", p.Name(), key)
+			}
+
+			if winner, exists := existingSources[key]; exists {
+				logger.Warn("Duplicate env key from runtime file plugin, skipping", "key", key, "winner", winner, "skipped", p.Name())
+				continue
+			}
+			if winner, exists := runtimeSources[key]; exists {
+				logger.Warn("Duplicate env key from runtime file plugin, skipping", "key", key, "winner", winner, "skipped", p.Name())
+				continue
+			}
+
+			file.EnvKey = key
+			files = append(files, file)
+			runtimeSources[key] = p.Name()
+		}
+	}
+
+	return files, nil
+}
+
+func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error) {
+	runtimeDir, err := os.MkdirTemp("", "gitops-runtime-files-*")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("create temp runtime dir: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.RemoveAll(runtimeDir)
+	}
+
+	if err := os.Chmod(runtimeDir, 0700); err != nil {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("chmod runtime dir: %w", err)
+	}
+
+	envToPath := make(map[string]string, len(files))
+	for idx, file := range files {
+		envKey := strings.TrimSpace(file.EnvKey)
+		if envKey == "" || strings.Contains(envKey, "=") {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("invalid runtime file env key")
+		}
+
+		filename := strings.TrimSpace(file.Filename)
+		if filename == "" {
+			filename = fmt.Sprintf("runtime_file_%d", idx)
+		}
+		filename = filepath.Base(filename)
+		if filename == "" || filename == "." {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("invalid runtime file name for %s", envKey)
+		}
+
+		targetPath := filepath.Join(runtimeDir, fmt.Sprintf("%02d_%s", idx, filename))
+		mode := os.FileMode(file.Mode & 0o777)
+		if mode == 0 {
+			mode = 0600
+		}
+		if err := os.WriteFile(targetPath, file.Content, mode); err != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("write runtime file for %s: %w", envKey, err)
+		}
+
+		envToPath[envKey] = targetPath
+	}
+
+	keys := make([]string, 0, len(envToPath))
+	for key := range envToPath {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		env = append(env, fmt.Sprintf("%s=%s", key, envToPath[key]))
+	}
+	return env, cleanup, nil
 }
 
 func (r *Reconciler) publishDeployEvent(ctx context.Context, eventType string, repo *github.Repository, status, message, duration string, start time.Time) {

@@ -15,6 +15,7 @@ plugins:
 	rm -rf plugins/mcp/docs
 	cp -R docs plugins/mcp/
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/env_forwarder.so plugins/env_forwarder/main.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/file_forwarder.so plugins/file_forwarder/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/google_secret_manager.so plugins/google_secret_manager/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/mcp.so plugins/mcp/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_pushover.so plugins/notifier_pushover/pushover.go

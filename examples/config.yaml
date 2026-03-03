@@ -38,3 +38,11 @@ env_forwarder:
     - "DB_PASSWORD"
   prefixes:
     - "APP_"
+
+file_forwarder:
+  files:
+    - env: "TLS_CERT_FILE"
+      path: "/etc/git-ops/tls/tls.crt"
+      filename: "tls.crt"
+      mode: "0600"
+      required: true
