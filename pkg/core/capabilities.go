@@ -10,4 +10,5 @@ const (
 	CapabilityTrigger      Capability = "TRIGGER"
 	CapabilitySecrets      Capability = "SECRETS"
 	CapabilityRuntimeFiles Capability = "RUNTIME_FILES"
+	CapabilityAudit        Capability = "AUDIT"
 )
