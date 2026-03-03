@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/mywio/git-ops/pkg/config"
 	"github.com/mywio/git-ops/pkg/core"
-	"github.com/mywio/git-ops/pkg/reconciler"
 )
 
 func main() {
@@ -20,7 +18,6 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Load Config
-	cfgEnv := config.LoadConfig()
 	cfgMapEnv := config.LoadConfigMapFromEnv()
 	configPath := os.Getenv("CONFIG_FILE")
 	if configPath == "" {
@@ -31,18 +28,6 @@ func main() {
 		logger.Error("Failed to load config file", "path", configPath, "error", err)
 	}
 	cfgMap := config.MergeConfigMap(cfgMapFile, cfgMapEnv)
-
-	cfg := cfgEnv
-	if coreSection, ok := cfgMapFile["core"]; ok {
-		cfgFile := config.LoadConfigFromMap(coreSection)
-		cfg = config.MergeConfig(cfgFile, cfgEnv)
-	}
-
-	// Validation
-	if cfg.Token == "" || len(cfg.Users) == 0 || cfg.Topic == "" {
-		logger.Error("Missing env vars: GITHUB_TOKEN, GITHUB_USERS, TOPIC_FILTER")
-		os.Exit(1)
-	}
 
 	// Setup Module Manager
 	mgr := core.NewModuleManager(logger)
@@ -63,10 +48,7 @@ func main() {
 		logger.Error("Failed to load plugins", "error", err)
 	}
 
-	// Register Modules
-	// Core Reconciler
-	r := reconciler.NewReconciler(cfg)
-	mgr.Register(r)
+	// Register Modules (if any core modules remain)
 
 	// Init Modules
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,34 +72,4 @@ func main() {
 	// Graceful Shutdown
 	mgr.Stop(ctx)
 	logger.Info("Shutdown complete")
-}
-
-func initCoreEvents() {
-	// Register core event types
-	core.RegisterEventType(core.EventTypeDesc{
-		Name:        "reconcile_now",
-		Description: "Request an immediate full reconciliation",
-		PayloadSpec: map[string]core.PayloadField{
-			"force": {Type: "bool", Description: "Force even if locked", Required: false},
-		},
-	})
-	core.RegisterEventType(core.EventTypeDesc{
-		Name:        "deploy_success",
-		Description: "Stack deployed successfully",
-		PayloadSpec: map[string]core.PayloadField{
-			"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
-		},
-	})
-	//TODO: Add more core events...
-
-	// Core subscribes to its own triggers
-	core.Subscribe("reconcile_now", handleReconcileNow)
-	// Optional: Subscribe to "*" for logging all events
-}
-
-// Example handler
-func handleReconcileNow(ctx context.Context, event core.InternalEvent) {
-	log.Printf("Handling %s from %s", event.Type, event.Source)
-	//Call your doFullReconciliation()
-	//After done, Publish(InternalEvent{Type: "reconcile_done", ...})
 }

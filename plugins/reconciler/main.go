@@ -1,4 +1,4 @@
-package reconciler
+package main
 
 import (
 	"context"
@@ -30,22 +30,107 @@ type Reconciler struct {
 	started  bool
 }
 
-func NewReconciler(cfg config.Config) *Reconciler {
-	return &Reconciler{
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
-	}
+var Plugin core.Plugin = &Reconciler{
+	stopCh: make(chan struct{}),
 }
 
 func (r *Reconciler) Name() string {
 	return "reconciler"
 }
 
+func (r *Reconciler) Description() string {
+	return "Core GitOps Reconciler"
+}
+
+func (r *Reconciler) Capabilities() []core.Capability {
+	return []core.Capability{}
+}
+
+func (r *Reconciler) Status() core.ServiceStatus {
+	if r.started {
+		return core.StatusHealthy
+	}
+	return core.StatusDegraded
+}
+
+func (r *Reconciler) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
+	switch action {
+	case "reconcile_now":
+		triggerCtx := context.Background()
+		if ctx != nil {
+			triggerCtx = ctx
+		}
+		go r.runReconcile(triggerCtx)
+		return true, nil
+	default:
+		return nil, fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+func (r *Reconciler) Config() any {
+	return r.cfg
+}
+
+func (r *Reconciler) handleReconcileNowEvent(ctx context.Context, event core.InternalEvent) {
+	r.logger.Info("Received reconcile_now event, triggering reconciliation", "source", event.Source)
+	go r.runReconcile(ctx)
+}
+
 func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	r.logger = logger
 	r.registry = registry
+
+	if registry != nil {
+		cfgMap := registry.GetConfig()
+		if coreSection, ok := cfgMap["core"]; ok {
+			r.cfg = config.LoadConfigFromMap(coreSection)
+		}
+	}
+	envCfg := config.LoadConfig()
+	r.cfg = config.MergeConfig(r.cfg, envCfg)
+
 	if r.cfg.Token == "" {
 		return fmt.Errorf("missing GITHUB_TOKEN")
+	}
+
+	// Register Events
+	if registry != nil {
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "reconcile_now",
+			Description: "Request an immediate full reconciliation",
+			PayloadSpec: map[string]core.PayloadField{
+				"force": {Type: "bool", Description: "Force even if locked", Required: false},
+			},
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "deploy_success",
+			Description: "Stack deployed successfully",
+			PayloadSpec: map[string]core.PayloadField{
+				"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
+			},
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "deploy_failed",
+			Description: "Stack deployment failed",
+			PayloadSpec: map[string]core.PayloadField{
+				"error": {Type: "string", Description: "Error message", Required: true},
+			},
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "deploy_start",
+			Description: "Stack deployment starting",
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "notify_secret_conflict",
+			Description: "Duplicate secret detected during deployment",
+			PayloadSpec: map[string]core.PayloadField{
+				"key":     {Type: "string", Description: "Secret key", Required: true},
+				"winner":  {Type: "string", Description: "Plugin that provided it", Required: true},
+				"skipped": {Type: "string", Description: "Plugin that was skipped", Required: true},
+			},
+		})
+
+		registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
 	}
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: r.cfg.Token})
