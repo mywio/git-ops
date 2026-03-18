@@ -25,3 +25,5 @@ fabric.properties
 bin/
 *.so
 git-ops
+
+codex.log

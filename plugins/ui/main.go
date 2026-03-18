@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
 
+//go:embed frontend/*
+var frontendFS embed.FS
+
 type UIPlugin struct {
-	mux    *http.ServeMux
-	logger *slog.Logger
+	mux      *http.ServeMux
+	logger   *slog.Logger
+	registry core.PluginRegistry
 }
 
 var Plugin = &UIPlugin{}
@@ -25,10 +31,28 @@ func (p *UIPlugin) Description() string {
 
 func (p *UIPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
+	p.registry = registry
 	if registry != nil {
 		p.mux = registry.GetMuxServer()
+		p.registerRoutes()
+		p.registerFrontend()
 	}
 	return nil
+}
+
+func (p *UIPlugin) registerFrontend() {
+	if p.mux == nil {
+		return
+	}
+
+	dist, err := fs.Sub(frontendFS, "frontend/dist")
+	if err != nil {
+		p.logger.Error("Failed to load frontend/dist from embedded FS", "error", err)
+		return
+	}
+
+	fsHandler := http.FileServer(http.FS(dist))
+	p.mux.Handle("/", fsHandler)
 }
 
 func (p *UIPlugin) Start(ctx context.Context) error {
