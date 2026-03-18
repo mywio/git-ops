@@ -1,0 +1,57 @@
+name: Release Please
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-artifacts:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build
+        run: |
+          make build
+          make plugins
+
+      - name: Package artifacts
+        run: |
+          VERSION=${{ needs.release-please.outputs.tag_name }}
+          mkdir -p dist/git-ops-${VERSION}
+          cp bin/git-ops dist/git-ops-${VERSION}/
+          cp -r bin/plugins dist/git-ops-${VERSION}/
+          cp README.md dist/git-ops-${VERSION}/
+          tar -czf dist/git-ops-${VERSION}-linux-amd64.tar.gz -C dist git-ops-${VERSION}
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: dist/*.tar.gz
