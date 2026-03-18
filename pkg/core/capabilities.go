@@ -11,4 +11,6 @@ const (
 	CapabilitySecrets      Capability = "SECRETS"
 	CapabilityRuntimeFiles Capability = "RUNTIME_FILES"
 	CapabilityAudit        Capability = "AUDIT"
+	CapabilityDeployer     Capability = "DEPLOYER"
+	CapabilitySystem       Capability = "SYSTEM"
 )

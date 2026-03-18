@@ -20,7 +20,8 @@ plugins:
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/mcp.so plugins/mcp/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_pushover.so plugins/notifier_pushover/pushover.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_webhook.so plugins/notifier_webhook/notifier_webhook.go
-	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/main.go
+	cd plugins/ui/frontend && npm install && npm run build
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/webhook_trigger.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/reconciler.so plugins/reconciler/main.go
 

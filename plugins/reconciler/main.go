@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -43,7 +45,7 @@ func (r *Reconciler) Description() string {
 }
 
 func (r *Reconciler) Capabilities() []core.Capability {
-	return []core.Capability{}
+	return []core.Capability{core.CapabilityDeployer, core.CapabilitySystem}
 }
 
 func (r *Reconciler) Status() core.ServiceStatus {
@@ -71,6 +73,19 @@ func (r *Reconciler) Execute(ctx context.Context, action string, params map[stri
 
 		go r.runReconcileStack(triggerCtx, owner, repo, forceType)
 		return true, nil
+	case "list_deployments":
+		// Quick heuristic: return all stacks
+		return r.listManagedDeployments()
+	case "system_info":
+		return r.getSystemInfo()
+	case "stream_logs":
+		owner, _ := params["owner"].(string)
+		repo, _ := params["repo"].(string)
+		lines, _ := params["lines"].(string)
+		if lines == "" {
+			lines = "100"
+		}
+		return r.streamLogs(ctx, owner, repo, lines)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
@@ -335,6 +350,100 @@ func (r *Reconciler) fetchRemovalInto(ctx context.Context, query string, target 
 		fullName := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
 		target[fullName] = true
 	}
+}
+
+// Deployer Implementations
+func (r *Reconciler) listManagedDeployments() ([]map[string]interface{}, error) {
+	entries, err := os.ReadDir(r.cfg.TargetDir)
+	if os.IsNotExist(err) {
+		return []map[string]interface{}{}, nil
+	}
+
+	var deployments []map[string]interface{}
+	for _, userDir := range entries {
+		if !userDir.IsDir() {
+			continue
+		}
+
+		userPath := filepath.Join(r.cfg.TargetDir, userDir.Name())
+		repos, _ := os.ReadDir(userPath)
+
+		for _, repoDir := range repos {
+			if !repoDir.IsDir() {
+				continue
+			}
+
+			repoPath := filepath.Join(userPath, repoDir.Name())
+
+			// Docker Compose LS lookup (requires compose plugin)
+			cmd := exec.Command("docker", "compose", "ps", "-a", "--format", "json")
+			cmd.Dir = repoPath
+			out, _ := cmd.Output()
+
+			status := "unknown"
+			if len(out) > 10 {
+				status = "running"
+			}
+
+			deployments = append(deployments, map[string]interface{}{
+				"owner":  userDir.Name(),
+				"repo":   repoDir.Name(),
+				"path":   repoPath,
+				"status": status,
+			})
+		}
+	}
+	return deployments, nil
+}
+
+func (r *Reconciler) getSystemInfo() (map[string]interface{}, error) {
+	cmd := exec.Command("docker", "info", "--format", "{{json .}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var info map[string]interface{}
+	// fallback if unable to parse docker system info perfectly
+	if err := json.Unmarshal(out, &info); err != nil {
+		return map[string]interface{}{"raw_docker_info": string(out)}, nil
+	}
+	return info, nil
+}
+
+func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) (<-chan string, error) {
+	repoPath := filepath.Join(r.cfg.TargetDir, owner, repo)
+	cmd := exec.Command("docker", "compose", "logs", "-f", "--tail", lines)
+	cmd.Dir = repoPath
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = cmd.Stdout // combine output
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	logChan := make(chan string)
+
+	go func() {
+		defer close(logChan)
+		defer cmd.Wait()
+
+		// Read output into channel
+		// Using a simple bufio.Scanner
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return // Request cancelled (user closed page)
+			case logChan <- scanner.Text():
+			}
+		}
+	}()
+
+	return logChan, nil
 }
 
 func (r *Reconciler) processLocalState(desiredState map[string]*github.Repository, removalState map[string]bool) {
