@@ -37,6 +37,7 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 | `DRY_RUN` | Log only, no changes | No | `false` |
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
 | `CORE_HTTP_ADDR` | Core HTTP bind address for APIs/UI | No | `127.0.0.1:8080` |
+| `SECRETS_DIR` | Path to local secrets directory | No | `/etc/git-ops/secrets` |
 
 You can also use a YAML config file (default `config.yaml` or set `CONFIG_FILE`).
 See `examples/config.yaml` and `docs/deploy.md`.
@@ -45,12 +46,16 @@ See `examples/config.yaml` and `docs/deploy.md`.
 git-ops supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
 
 Available plugins:
+- **Reconciler**: Core GitOps engine — scans GitHub, detects changes, and runs `docker compose up/down`.
 - **Google Secret Manager**: Injects secrets from GSM into deployments.
 - **Env Forwarder**: Forwards allowlisted environment variables into docker compose.
 - **File Forwarder**: Forwards allowlisted host files as runtime file paths into docker compose.
 - **MCP**: AI Context integration (Model Context Protocol).
-- **UI**: Web Dashboard.
-- **Notifications**: Pushover/Webhook alerts.
+- **UI**: Web Dashboard with deployment list, log streaming, and system info.
+- **Pushover Notifier**: Sends deployment alerts via Pushover.
+- **Webhook Notifier**: Sends deployment events to a generic webhook endpoint.
+- **Webhook Trigger**: Exposes `POST /reconcile` to trigger an immediate reconciliation on demand.
+- **Audit**: Subscribes to all events and maintains a queryable audit log (memory or SQLite).
 
 See [docs/plugins/](docs/plugins/) for more details.
 
