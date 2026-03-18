@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
@@ -113,6 +114,7 @@ func (p *AuditPlugin) Execute(ctx context.Context, action string, params map[str
 	offset := 0
 	order := "desc"
 	var filter map[string]any
+	var since, until *time.Time
 
 	if params != nil {
 		if l, ok := params["limit"].(int); ok {
@@ -134,9 +136,25 @@ func (p *AuditPlugin) Execute(ctx context.Context, action string, params map[str
 		if f, ok := params["filter"].(map[string]any); ok {
 			filter = f
 		}
+
+		if s, ok := params["since"].(time.Time); ok {
+			since = &s
+		} else if s, ok := params["since"].(string); ok && s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				since = &t
+			}
+		}
+
+		if u, ok := params["until"].(time.Time); ok {
+			until = &u
+		} else if u, ok := params["until"].(string); ok && u != "" {
+			if t, err := time.Parse(time.RFC3339, u); err == nil {
+				until = &t
+			}
+		}
 	}
 
-	events, err := p.store.GetLastEvents(filter, limit, offset, order)
+	events, err := p.store.GetLastEvents(filter, limit, offset, order, since, until)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get events: %w", err)
 	}

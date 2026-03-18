@@ -47,14 +47,14 @@ func runStoreTests(t *testing.T, store AuditStore) {
 	}
 
 	// Test GetLastEvents default (no filter, desc order)
-	res, err := store.GetLastEvents(nil, 10, 0, "desc")
+	res, err := store.GetLastEvents(nil, 10, 0, "desc", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, res, 3)
 	assert.Equal(t, core.EventTypeName("reconcile_start"), res[0].Type)
 	assert.Equal(t, core.EventTypeName("deploy_start"), res[2].Type)
 
 	// Test asc order
-	resAsc, err := store.GetLastEvents(nil, 10, 0, "asc")
+	resAsc, err := store.GetLastEvents(nil, 10, 0, "asc", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, resAsc, 3)
 	assert.Equal(t, core.EventTypeName("deploy_start"), resAsc[0].Type)
@@ -62,23 +62,31 @@ func runStoreTests(t *testing.T, store AuditStore) {
 
 	// Test filter
 	filter := map[string]any{"repo": "repo1"}
-	resFilter, err := store.GetLastEvents(filter, 10, 0, "desc")
+	resFilter, err := store.GetLastEvents(filter, 10, 0, "desc", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, resFilter, 2)
 	assert.Equal(t, core.EventTypeName("deploy_success"), resFilter[0].Type)
 
 	// Test Limit and Offset
-	resLim, err := store.GetLastEvents(nil, 2, 1, "desc")
+	resLim, err := store.GetLastEvents(nil, 2, 1, "desc", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, resLim, 2)
 	assert.Equal(t, core.EventTypeName("deploy_success"), resLim[0].Type)
 	assert.Equal(t, core.EventTypeName("deploy_start"), resLim[1].Type)
 
+	// Test since/until filters
+	since := now.Add(-7 * time.Minute)
+	until := now.Add(-2 * time.Minute)
+	resSince, err := store.GetLastEvents(nil, 10, 0, "desc", &since, &until)
+	require.NoError(t, err)
+	require.Len(t, resSince, 1)
+	assert.Equal(t, core.EventTypeName("deploy_success"), resSince[0].Type)
+
 	// Test Cleanup
 	err = store.Cleanup(2)
 	require.NoError(t, err)
 
-	resClean, err := store.GetLastEvents(nil, 10, 0, "desc")
+	resClean, err := store.GetLastEvents(nil, 10, 0, "desc", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, resClean, 2)
 	// The oldest one (deploy_start) should be deleted

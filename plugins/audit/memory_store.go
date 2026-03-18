@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
@@ -26,12 +27,18 @@ func (s *memoryStore) Save(event core.InternalEvent) error {
 	return nil
 }
 
-func (s *memoryStore) GetLastEvents(filter map[string]any, limit, offset int, order string) ([]core.InternalEvent, error) {
+func (s *memoryStore) GetLastEvents(filter map[string]any, limit, offset int, order string, since, until *time.Time) ([]core.InternalEvent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var matched []core.InternalEvent
 	for _, ev := range s.events {
+		if since != nil && ev.Timestamp.Before(*since) {
+			continue
+		}
+		if until != nil && ev.Timestamp.After(*until) {
+			continue
+		}
 		if s.matches(ev, filter) {
 			matched = append(matched, ev)
 		}

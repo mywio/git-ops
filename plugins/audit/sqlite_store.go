@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "github.com/glebarez/go-sqlite"
 	"github.com/mywio/git-ops/pkg/core"
@@ -78,7 +79,7 @@ func (s *sqliteStore) Save(event core.InternalEvent) error {
 	return err
 }
 
-func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, order string) ([]core.InternalEvent, error) {
+func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, order string, since, until *time.Time) ([]core.InternalEvent, error) {
 	query := "SELECT type, timestamp, source, repo, details, string_val FROM audit_events WHERE 1=1"
 	var args []any
 
@@ -95,6 +96,15 @@ func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, or
 			query += " AND repo = ?"
 			args = append(args, repo)
 		}
+	}
+
+	if since != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, since.UTC())
+	}
+	if until != nil {
+		query += " AND timestamp <= ?"
+		args = append(args, until.UTC())
 	}
 
 	if strings.ToLower(order) == "asc" {

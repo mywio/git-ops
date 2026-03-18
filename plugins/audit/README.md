@@ -25,7 +25,9 @@ Config section: `audit`
 | `limit` | int | `100` | Maximum number of events to return |
 | `offset` | int | `0` | Number of events to skip |
 | `order` | string | `desc` | Sort order: `asc` or `desc` |
-| `filter` | map | — | Key/value pairs to filter events by |
+| `filter` | map | — | Key/value filter: `type` (event type), `source` (plugin name), `repo` (repo name) |
+| `since` | string (RFC3339) or `time.Time` | — | Return only events at or after this time |
+| `until` | string (RFC3339) or `time.Time` | — | Return only events at or before this time |
 
 ## Example config
 
