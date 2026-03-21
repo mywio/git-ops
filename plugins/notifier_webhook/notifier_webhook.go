@@ -14,10 +14,10 @@ import (
 )
 
 type WebhookPlugin struct {
-	logger *slog.Logger
-	url    string
-	client *http.Client
-	enabled bool
+	logger        *slog.Logger
+	url           string
+	client        *http.Client
+	enabled       bool
 	subscriptions []string
 }
 
@@ -152,13 +152,7 @@ func (p *WebhookPlugin) send(ctx context.Context, event core.InternalEvent) erro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	payload := map[string]interface{}{
-		"event_type": event.Type,
-		"source":     event.Source,
-		"repo":       event.Repo,
-		"message":    event.String,
-		"details":    event.Details,
-	}
+	payload := core.NewNotificationPayload(event)
 
 	data, err := json.Marshal(payload)
 	if err != nil {

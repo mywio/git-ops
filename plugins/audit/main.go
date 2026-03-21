@@ -134,7 +134,12 @@ func (p *AuditPlugin) Execute(ctx context.Context, action string, params map[str
 		}
 
 		if f, ok := params["filter"].(map[string]any); ok {
-			filter = f
+			filter = cloneAuditFilter(f)
+		} else if f, ok := params["filter"].(map[string]string); ok {
+			filter = make(map[string]any, len(f))
+			for key, value := range f {
+				filter[key] = value
+			}
 		}
 
 		if s, ok := params["since"].(time.Time); ok {
@@ -160,4 +165,17 @@ func (p *AuditPlugin) Execute(ctx context.Context, action string, params map[str
 	}
 
 	return events, nil
+}
+
+func cloneAuditFilter(filter map[string]any) map[string]any {
+	if len(filter) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(filter))
+	for key, value := range filter {
+		cloned[key] = value
+	}
+
+	return cloned
 }

@@ -67,20 +67,7 @@ func (s *memoryStore) GetLastEvents(filter map[string]any, limit, offset int, or
 }
 
 func (s *memoryStore) matches(event core.InternalEvent, filter map[string]any) bool {
-	if filter == nil {
-		return true
-	}
-
-	if t, ok := filter["type"].(string); ok && t != "" && string(event.Type) != t {
-		return false
-	}
-	if src, ok := filter["source"].(string); ok && src != "" && event.Source != src {
-		return false
-	}
-	if repo, ok := filter["repo"].(string); ok && repo != "" && event.Repo != repo {
-		return false
-	}
-	return true
+	return eventMatchesAuditFilter(event, filter)
 }
 
 func (s *memoryStore) Cleanup(keep int) error {

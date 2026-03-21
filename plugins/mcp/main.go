@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,6 +53,7 @@ type deploymentInfo struct {
 	Duration  string    `json:"duration,omitempty"`
 	Source    string    `json:"source,omitempty"`
 }
+
 // Exported for plugin loading (core loads symbol "MCPPlugin" or similar)
 var Plugin = &MCPPlugin{}
 
@@ -95,7 +97,10 @@ func (p *MCPPlugin) Init(ctx context.Context, logger *slog.Logger, registry core
 
 // Start starts the plugin services
 func (p *MCPPlugin) Start(ctx context.Context) error {
-	//mux := http.NewServeMux()
+	// MCP protocol endpoint (JSON-RPC 2.0, used by Claude Code)
+	p.mux.HandleFunc("/mcp", authMiddleware(p.apiKey, p.handleMCP))
+
+	// Legacy REST endpoints
 	p.mux.HandleFunc("/mcp/setup", authMiddleware(p.apiKey, p.handleSetup))
 	p.mux.HandleFunc("/mcp/stacks", authMiddleware(p.apiKey, p.handleStacks))
 	p.mux.HandleFunc("/mcp/deployments", authMiddleware(p.apiKey, p.handleDeployments))
@@ -161,14 +166,23 @@ func (p *MCPPlugin) Config() any {
 	}
 }
 
-// Auth middleware
+// authMiddleware accepts Authorization: Bearer <token> (used by Claude MCP)
+// or X-API-Key: <token> (legacy REST clients).
 func authMiddleware(key string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if key != "" && r.Header.Get("X-API-Key") != key {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if key == "" {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		if bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); bearer == key {
+			next(w, r)
+			return
+		}
+		if r.Header.Get("X-API-Key") == key {
+			next(w, r)
+			return
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
 
@@ -190,14 +204,14 @@ func (p *MCPPlugin) handleStacks(w http.ResponseWriter, r *http.Request) {
 	p.wg.Add(1)
 	defer p.wg.Done()
 
-	repos, err := listDirs(p.targetDir)
+	repos, err := listStacks(p.targetDir)
 	if err != nil {
 		jsonError(w, err)
 		return
 	}
 	stacks := []map[string]interface{}{}
 	for _, repo := range repos {
-		lastSync, _ := os.Stat(filepath.Join(p.targetDir, repo)) // Approx last reconcile
+		lastSync, _ := os.Stat(filepath.Join(p.targetDir, filepath.FromSlash(repo))) // Approx last reconcile
 		entry := map[string]interface{}{
 			"repo":     repo,
 			"lastSync": lastSync.ModTime().Format(time.RFC3339),
@@ -235,9 +249,9 @@ func (p *MCPPlugin) handleServices(w http.ResponseWriter, r *http.Request) {
 	p.wg.Add(1)
 	defer p.wg.Done()
 
-	repo := strings.TrimPrefix(r.URL.Path, "/mcp/services/")
-	if repo == "" {
-		jsonError(w, errors.New("repo required"))
+	repo, err := parseStackPath(r.URL.Path, "/mcp/services/")
+	if err != nil {
+		jsonError(w, err)
 		return
 	}
 	output, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json")
@@ -245,9 +259,8 @@ func (p *MCPPlugin) handleServices(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
-	// Parse JSON from compose ps (array of service objects)
-	var services []map[string]interface{}
-	if err := json.Unmarshal([]byte(output), &services); err != nil {
+	services, err := parseComposeServicesOutput(output)
+	if err != nil {
 		jsonError(w, err)
 		return
 	}
@@ -259,12 +272,11 @@ func (p *MCPPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 	p.wg.Add(1)
 	defer p.wg.Done()
 
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/mcp/logs/"), "/", 2)
-	if len(parts) != 2 {
-		jsonError(w, errors.New("format: /logs/:repo/:service"))
+	repo, service, err := parseStackServicePath(r.URL.Path, "/mcp/logs/")
+	if err != nil {
+		jsonError(w, err)
 		return
 	}
-	repo, service := parts[0], parts[1]
 	lines := r.URL.Query().Get("lines")
 	if lines == "" {
 		lines = "100"
@@ -288,21 +300,39 @@ func (p *MCPPlugin) handleHealth(w http.ResponseWriter, r *http.Request) {
 	p.wg.Add(1)
 	defer p.wg.Done()
 
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/mcp/health/"), "/", 2)
-	if len(parts) != 2 {
-		jsonError(w, errors.New("format: /health/:repo/:service"))
+	repo, service, err := parseStackServicePath(r.URL.Path, "/mcp/health/")
+	if err != nil {
+		jsonError(w, err)
 		return
 	}
-	repo, service := parts[0], parts[1]
-	// Use docker inspect for health
-	cmd := exec.Command("docker", "inspect", "--format", "{{json .State.Health}}", fmt.Sprintf("%s_%s_1", repo, service)) // Assume default container name
-	output, err := cmd.Output()
+	discoveryOutput, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json", service)
+	if err != nil {
+		jsonError(w, err)
+		return
+	}
+	containers, err := parseComposeServicesOutput(discoveryOutput)
+	if err != nil {
+		jsonError(w, err)
+		return
+	}
+	if len(containers) == 0 {
+		jsonError(w, fmt.Errorf("service %q not found in stack %q", service, repo))
+		return
+	}
+	containerRef := composeContainerRef(containers[0])
+	if containerRef == "" {
+		jsonError(w, fmt.Errorf("service %q not found in stack %q", service, repo))
+		return
+	}
+	// Use docker inspect for health on the discovered container reference.
+	cmd := exec.Command("docker", "inspect", "--format", "{{json .State.Health}}", containerRef)
+	healthOutput, err := cmd.Output()
 	if err != nil {
 		jsonError(w, err)
 		return
 	}
 	var health map[string]interface{}
-	if err := json.Unmarshal(output, &health); err != nil {
+	if err := json.Unmarshal(healthOutput, &health); err != nil {
 		jsonError(w, err)
 		return
 	}
@@ -344,7 +374,7 @@ func (p *MCPPlugin) getDeploymentInfo(repo string) (deploymentInfo, bool) {
 	p.deployMu.RLock()
 	defer p.deployMu.RUnlock()
 	for _, info := range p.deployments {
-		if info.Repo == repo || strings.HasSuffix(info.FullName, "/"+repo) {
+		if info.FullName == repo || info.Repo == repo || strings.HasSuffix(info.FullName, "/"+repo) {
 			return info, true
 		}
 	}
@@ -363,18 +393,92 @@ func jsonError(w http.ResponseWriter, err error) {
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
-func listDirs(dir string) ([]string, error) {
-	files, err := os.ReadDir(dir)
+// parseStackServicePath expects exactly {owner}/{repo}/{service} after prefix.
+func parseStackServicePath(rawPath, prefix string) (stack string, service string, err error) {
+	trimmed := strings.TrimPrefix(rawPath, prefix)
+	if trimmed == rawPath || trimmed == "" {
+		return "", "", fmt.Errorf("format: %s{owner}/{repo}/{service}", prefix)
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("format: %s{owner}/{repo}/{service}", prefix)
+	}
+
+	stack = path.Join(parts[0], parts[1])
+	service = parts[2]
+	return stack, service, nil
+}
+
+func parseComposeServicesOutput(output string) ([]map[string]interface{}, error) {
+	var services []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &services); err == nil {
+		return services, nil
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var service map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &service); err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	if len(services) == 0 {
+		return nil, errors.New("invalid compose ps output")
+	}
+	return services, nil
+}
+
+func parseStackPath(rawPath, prefix string) (stack string, err error) {
+	trimmed := strings.TrimPrefix(rawPath, prefix)
+	if trimmed == rawPath || trimmed == "" {
+		return "", fmt.Errorf("format: %s{owner}/{repo}", prefix)
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("format: %s{owner}/{repo}", prefix)
+	}
+	return trimmed, nil
+}
+
+func composeContainerRef(container map[string]interface{}) string {
+	for _, key := range []string{"Name", "ID", "ContainerID"} {
+		if value, ok := container[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func listStacks(dir string) ([]string, error) {
+	owners, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	var dirs []string
-	for _, f := range files {
-		if f.IsDir() {
-			dirs = append(dirs, f.Name())
+
+	var stacks []string
+	for _, owner := range owners {
+		if !owner.IsDir() {
+			continue
+		}
+
+		repos, err := os.ReadDir(filepath.Join(dir, owner.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, repo := range repos {
+			if repo.IsDir() {
+				stacks = append(stacks, path.Join(owner.Name(), repo.Name()))
+			}
 		}
 	}
-	return dirs, nil
+	sort.Strings(stacks)
+	return stacks, nil
 }
 
 func dockerComposeExec(targetDir, repo string, args ...string) (string, error) {

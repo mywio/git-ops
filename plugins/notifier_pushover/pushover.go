@@ -14,11 +14,12 @@ import (
 )
 
 type PushoverNotifier struct {
-	logger  *slog.Logger
-	client  *http.Client
-	token   core.Secret
-	user    string
-	enabled bool
+	logger        *slog.Logger
+	client        *http.Client
+	token         core.Secret
+	user          string
+	apiURL        string
+	enabled       bool
 	subscriptions []string
 }
 
@@ -192,16 +193,13 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	details, err := json.Marshal(event.Details) // Assuming Details is map[string]interface{}
-	if err != nil {
-		return err
-	}
+	notification := core.NewNotificationPayload(event)
 
 	payload := map[string]interface{}{
 		"token":   n.token.Value,
 		"user":    n.user,
-		"message": fmt.Sprintf("[%s] %s\nRepo: %s/%s\n%s", event.Type, event.String, event.Source, event.Repo, string(details)),
-		"title":   "git-ops Notification",
+		"message": notification.Body,
+		"title":   notification.Title,
 		// TODO: Have a priority map in config. That will map notification types to priority levels.
 		//"priority": ,
 	}
@@ -211,7 +209,7 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.pushover.net/1/messages.json", bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.endpoint(), bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -229,6 +227,13 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 
 	n.logger.InfoContext(ctx, "Pushover notification delivered successfully")
 	return nil
+}
+
+func (n *PushoverNotifier) endpoint() string {
+	if n.apiURL != "" {
+		return n.apiURL
+	}
+	return "https://api.pushover.net/1/messages.json"
 }
 
 func normalizePatterns(values []string) []string {

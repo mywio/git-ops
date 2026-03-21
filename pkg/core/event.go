@@ -28,7 +28,7 @@ type InternalEvent struct {
 	Timestamp time.Time              `json:"timestamp"`
 	Source    string                 `json:"source"` // "timer", "webhook_trigger", "notifications", etc.
 	Repo      string                 `json:"repo,omitempty"`
-	Details   map[string]interface{} `json:"details,omitempty"`
+	Details   map[string]interface{} `json:"details,omitempty"` // Structured metadata lives here; keep the top-level surface small.
 	String    string                 `json:"string,omitempty"`
 }
 

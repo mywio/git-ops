@@ -1,0 +1,139 @@
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/mywio/git-ops/pkg/core"
+)
+
+type executionSnapshot struct {
+	ExecutionID string
+	Owner       string
+	Repo        string
+	FullName    string
+	Status      core.ExecutionStatus
+	Stage       core.ExecutionStage
+	LastError   string
+	NodeID      string
+	Trigger     string
+	RequestedAt time.Time
+	StartedAt   time.Time
+	UpdatedAt   time.Time
+	Active      bool
+}
+
+type executionStateManager struct {
+	mu        sync.RWMutex
+	now       func() time.Time
+	snapshots map[string]executionSnapshot
+}
+
+func newExecutionStateManager(now func() time.Time) *executionStateManager {
+	if now == nil {
+		now = time.Now
+	}
+	return &executionStateManager{
+		now:       now,
+		snapshots: make(map[string]executionSnapshot),
+	}
+}
+
+func (m *executionStateManager) acquire(fullName, owner, repo, nodeID, trigger string) (executionSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.snapshots[fullName]; ok && existing.Active {
+		return existing, false
+	}
+
+	ts := m.now().UTC()
+	snapshot := executionSnapshot{
+		ExecutionID: fmt.Sprintf("%s-%d", fullName, ts.UnixNano()),
+		Owner:       owner,
+		Repo:        repo,
+		FullName:    fullName,
+		Status:      core.ExecutionStatusRequested,
+		Stage:       core.ExecutionStageRequested,
+		NodeID:      nodeID,
+		Trigger:     trigger,
+		RequestedAt: ts,
+		UpdatedAt:   ts,
+		Active:      true,
+	}
+	m.snapshots[fullName] = snapshot
+	return snapshot, true
+}
+
+func (m *executionStateManager) markRunning(fullName string, stage core.ExecutionStage) (executionSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	snapshot, ok := m.snapshots[fullName]
+	if !ok {
+		return executionSnapshot{}, false
+	}
+
+	ts := m.now().UTC()
+	snapshot.Status = core.ExecutionStatusRunning
+	snapshot.Stage = stage
+	snapshot.LastError = ""
+	snapshot.UpdatedAt = ts
+	snapshot.Active = true
+	if snapshot.StartedAt.IsZero() {
+		snapshot.StartedAt = ts
+	}
+
+	m.snapshots[fullName] = snapshot
+	return snapshot, true
+}
+
+func (m *executionStateManager) markFailed(fullName string, stage core.ExecutionStage, err error) (executionSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	snapshot, ok := m.snapshots[fullName]
+	if !ok {
+		return executionSnapshot{}, false
+	}
+
+	snapshot.Status = core.ExecutionStatusFailed
+	snapshot.Stage = stage
+	snapshot.LastError = ""
+	if err != nil {
+		snapshot.LastError = err.Error()
+	}
+	snapshot.UpdatedAt = m.now().UTC()
+	snapshot.Active = false
+
+	m.snapshots[fullName] = snapshot
+	return snapshot, true
+}
+
+func (m *executionStateManager) markSucceeded(fullName string, stage core.ExecutionStage) (executionSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	snapshot, ok := m.snapshots[fullName]
+	if !ok {
+		return executionSnapshot{}, false
+	}
+
+	snapshot.Status = core.ExecutionStatusSucceeded
+	snapshot.Stage = stage
+	snapshot.LastError = ""
+	snapshot.UpdatedAt = m.now().UTC()
+	snapshot.Active = false
+
+	m.snapshots[fullName] = snapshot
+	return snapshot, true
+}
+
+func (m *executionStateManager) snapshot(fullName string) (executionSnapshot, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	snapshot, ok := m.snapshots[fullName]
+	return snapshot, ok
+}
