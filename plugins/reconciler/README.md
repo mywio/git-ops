@@ -10,9 +10,9 @@ Config section: `core` (shared with main configuration)
 
 On each sync interval the reconciler builds three lists:
 
-1. **Desired** — repos matching `user:<name> topic:<TOPIC_FILTER> archived:false`
-2. **Removal (explicit)** — repos tagged `git-ops-remove`
-3. **Removal (archived)** — repos matching the topic filter but with `archived:true`
+1. **Desired** - repos matching `user:<name> topic:<TOPIC_FILTER> archived:false`
+2. **Removal (explicit)** - repos tagged `git-ops-remove`
+3. **Removal (archived)** - repos matching the topic filter but with `archived:true`
 
 Local stacks that are in the removal list are brought down and deleted.
 Local stacks not found in any GitHub query produce a warning but are **not** automatically deleted (divergence guard).
@@ -27,13 +27,30 @@ Local stacks not found in any GitHub query produce a warning but are **not** aut
 | `deploy_success` | Emitted when a stack deploys successfully |
 | `deploy_failed` | Emitted when a stack deployment fails |
 | `notify_secret_conflict` | Emitted when two secret plugins return the same key |
+| `stack_commit_changed` | Emitted after a successful reconcile when the observed repository commit advances |
+
+### `stack_commit_changed`
+
+`stack_commit_changed` keeps commit movement visible for audit and downstream automation. Its `Details` payload includes:
+
+- `owner`
+- `repo`
+- `full_name`
+- `stack_path`
+- `old_commit`
+- `new_commit`
+- `compose_changed`
+
+`Source` and `Timestamp` remain on the top-level event.
+
+When `compose_changed=true`, the reconciler already handled the compose deployment itself. Downstream image-refresh logic should ignore that event and only react when `compose_changed=false`.
 
 ## Execute actions
 
 | Action | Parameters | Description |
 | :--- | :--- | :--- |
-| `list_deployments` | — | Returns all locally managed stacks with status |
-| `system_info` | — | Returns Docker daemon info |
+| `list_deployments` | - | Returns all locally managed stacks with status |
+| `system_info` | - | Returns Docker daemon info |
 | `stream_logs` | `owner`, `repo`, `lines` | Streams `docker compose logs` as a channel of strings |
 | `reconcile_stack` | `owner`, `repo`, `force_type` | Triggers a targeted reconciliation |
 

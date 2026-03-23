@@ -25,5 +25,9 @@ fabric.properties
 bin/
 *.so
 git-ops
+.gocache/
+.gomodcache/
 
 codex.log
+
+docs/superpowers/

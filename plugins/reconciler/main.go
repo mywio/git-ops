@@ -32,6 +32,7 @@ type Reconciler struct {
 	started        bool
 	nodeID         string
 	executionState *executionStateManager
+	commitTracker  *commitTracker
 	lifecycleMu    sync.Mutex
 	stopping       bool
 }
@@ -132,6 +133,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 	if r.executionState == nil {
 		r.executionState = newExecutionStateManager(time.Now)
 	}
+	if r.commitTracker == nil {
+		r.commitTracker = newCommitTracker()
+	}
 	if r.nodeID == "" {
 		hostName, err := os.Hostname()
 		if err != nil || strings.TrimSpace(hostName) == "" {
@@ -200,6 +204,19 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				"full_name":    {Type: "string", Description: "Repository full name", Required: true},
 				"stage":        {Type: "string", Description: "Current execution stage", Required: true},
 				"status":       {Type: "string", Description: "Current execution status", Required: true},
+			},
+		})
+		registry.RegisterEventType(core.EventTypeDesc{
+			Name:        "stack_commit_changed",
+			Description: "Stack commit advanced after successful reconciliation",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":           {Type: "string", Description: "Repository owner", Required: true},
+				"repo":            {Type: "string", Description: "Repository name", Required: true},
+				"full_name":       {Type: "string", Description: "Repository full name", Required: true},
+				"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
+				"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
+				"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
+				"compose_changed": {Type: "bool", Description: "Whether compose changed in the successful reconcile path", Required: true},
 			},
 		})
 		registry.RegisterEventType(core.EventTypeDesc{
@@ -876,6 +893,13 @@ func (r *Reconciler) deployRepoWithExecution(ctx context.Context, fullName strin
 		return
 	}
 
+	currentCommitSHA, err := fetchRepoDefaultBranchSHA(ctx, r.client, repo)
+	if err != nil {
+		logger.Error("Failed to resolve repository commit sha", "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageFetch, err)
+		return
+	}
+
 	// Structure: TARGET_DIR / OWNER / REPO / docker-compose.yml
 	repoLocalPath := filepath.Join(r.cfg.TargetDir, *repo.Owner.Login, *repo.Name)
 	filePath := filepath.Join(repoLocalPath, "docker-compose.yml")
@@ -924,7 +948,7 @@ func (r *Reconciler) deployRepoWithExecution(ctx context.Context, fullName strin
 	existing, _ := os.ReadFile(filePath)
 	if string(existing) == content && forceType == "" {
 		// No force type specified and no changes detected
-		r.succeedExecution(ctx, fullName)
+		r.completeSuccessfulStack(ctx, fullName, repo, repoLocalPath, currentCommitSHA, false)
 		return
 	}
 
@@ -936,7 +960,7 @@ func (r *Reconciler) deployRepoWithExecution(ctx context.Context, fullName strin
 	logger.Info("Updating deployment")
 
 	if r.cfg.DryRun {
-		r.succeedExecution(ctx, fullName)
+		r.completeSuccessfulStack(ctx, fullName, repo, repoLocalPath, currentCommitSHA, true)
 		return
 	}
 
@@ -1041,7 +1065,7 @@ func (r *Reconciler) deployRepoWithExecution(ctx context.Context, fullName strin
 
 	logger.Info("Deploy sequence complete")
 	r.publishDeployEvent(ctx, "deploy_success", repo, "success", "", time.Since(deployStart).String(), deployStart)
-	r.succeedExecution(ctx, fullName)
+	r.completeSuccessfulStack(ctx, fullName, repo, repoLocalPath, currentCommitSHA, true)
 }
 
 func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string, logger *slog.Logger, existingSources map[string]string) ([]core.RuntimeFile, error) {
