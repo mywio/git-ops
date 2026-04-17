@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
 
       - name: Build core
         run: make build VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "ci")

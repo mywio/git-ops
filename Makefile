@@ -4,7 +4,7 @@ PLUGINS_DIR=$(BUILD_DIR)/plugins
 VERSION ?= dev
 GO_LDFLAGS=-ldflags "-X github.com/mywio/git-ops/pkg/core.Version=$(VERSION)"
 
-.PHONY: all build plugins build-plugins ui _check-npm clean
+.PHONY: all build plugins build-plugins ui ui-plugin _check-npm clean
 
 all: build plugins
 
@@ -12,7 +12,7 @@ build:
 	mkdir -p $(BUILD_DIR)
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) main.go
 
-plugins: build-plugins ui
+plugins: build-plugins ui-plugin
 
 build-plugins:
 	mkdir -p $(PLUGINS_DIR)
@@ -26,12 +26,15 @@ build-plugins:
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/discord.so plugins/notifier_discord/discord.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_pushover.so plugins/notifier_pushover/pushover.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_webhook.so plugins/notifier_webhook/notifier_webhook.go
-	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/webhook_trigger.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/reconciler.so plugins/reconciler/*.go
 
 ui: _check-npm
 	cd plugins/ui/frontend && npm install && npm run build
+
+ui-plugin: ui
+	mkdir -p $(PLUGINS_DIR)
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/ui.so plugins/ui/*.go
 
 _check-npm:
 	@command -v npm >/dev/null 2>&1 || { echo "npm not found - install Node.js to build the UI plugin"; exit 1; }
