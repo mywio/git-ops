@@ -27,6 +27,15 @@ func TestRunComposePreflightFailsWhenComposeFileMissing(t *testing.T) {
 	assert.Equal(t, core.FailureClassValidation, classifyFailure(err, core.ExecutionStageComposeUp))
 }
 
+func TestRunComposePreflightSupportsComposeYAML(t *testing.T) {
+	repoPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "compose.yaml"), []byte("services: {}"), 0o644))
+
+	err := runComposePreflight(repoPath, nil)
+
+	require.NoError(t, err)
+}
+
 func TestEnsureDirectoryWritableFailsWhenPathIsNotDirectory(t *testing.T) {
 	baseDir := t.TempDir()
 	notDir := filepath.Join(baseDir, "not-a-directory")
@@ -50,20 +59,16 @@ func TestValidateRuntimeFileEnvFailsWhenMaterializedFileMissing(t *testing.T) {
 func TestFailExecutionPublishesFailureClassificationForPreflightError(t *testing.T) {
 	executionID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
 	events := make(chan core.InternalEvent, 1)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) {
-		if event.Details["execution_id"] == executionID {
-			events <- event
-		}
-	}
-	defer func() {
-		publishInternalEvent = originalPublish
-	}()
 
 	state := newExecutionStateManager(fixedTimes(time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)))
 	reconciler := &Reconciler{
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		executionState: state,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Details["execution_id"] == executionID {
+				events <- event
+			}
+		},
 	}
 	_, acquired := state.acquire("acme/api", "acme", "api", "node-a", "manual")
 	require.True(t, acquired)
@@ -105,15 +110,6 @@ func TestPruneServiceDeletesFolderWhenComposeDownFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "docker-compose.yml"), []byte("services: {}"), 0644))
 
 	events := make(chan core.InternalEvent, 1)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) {
-		if event.Details["full_name"] == "acme/api" && event.Details["status"] == string(core.ExecutionStatusFailed) {
-			events <- event
-		}
-	}
-	defer func() {
-		publishInternalEvent = originalPublish
-	}()
 
 	originalComposeCommand := executeComposeCommand
 	executeComposeCommand = func(repoLocalPath string, cmdEnv, runtimeFileEnv []string, args ...string) error {
@@ -138,6 +134,11 @@ func TestPruneServiceDeletesFolderWhenComposeDownFails(t *testing.T) {
 	reconciler := &Reconciler{
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		executionState: state,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Details["full_name"] == "acme/api" && event.Details["status"] == string(core.ExecutionStatusFailed) {
+				events <- event
+			}
+		},
 	}
 
 	pruned := reconciler.pruneService(context.Background(), "acme/api", "acme", "api", repoPath)
@@ -165,15 +166,6 @@ func TestPruneServiceFailsWhenFolderDeletionFailsAfterComposeDown(t *testing.T) 
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "docker-compose.yml"), []byte("services: {}"), 0644))
 
 	events := make(chan core.InternalEvent, 1)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) {
-		if event.Details["full_name"] == "acme/api" && event.Details["status"] == string(core.ExecutionStatusFailed) {
-			events <- event
-		}
-	}
-	defer func() {
-		publishInternalEvent = originalPublish
-	}()
 
 	originalComposeCommand := executeComposeCommand
 	executeComposeCommand = func(repoLocalPath string, cmdEnv, runtimeFileEnv []string, args ...string) error {
@@ -203,6 +195,11 @@ func TestPruneServiceFailsWhenFolderDeletionFailsAfterComposeDown(t *testing.T) 
 	reconciler := &Reconciler{
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		executionState: state,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Details["full_name"] == "acme/api" && event.Details["status"] == string(core.ExecutionStatusFailed) {
+				events <- event
+			}
+		},
 	}
 
 	pruned := reconciler.pruneService(context.Background(), "acme/api", "acme", "api", repoPath)
@@ -319,4 +316,44 @@ func TestRunComposeDownWithRemoveImagesFailsExecution(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, core.ExecutionStatusFailed, snapshot.Status)
 	assert.Equal(t, core.ExecutionStageComposeDown, snapshot.Stage)
+}
+
+func TestPruneServiceSkipsLockedStack(t *testing.T) {
+	repoPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, ".git-ops-lock"), []byte("locked"), 0o644))
+
+	events := make(chan core.InternalEvent, 3)
+	state := newExecutionStateManager(fixedTimes(time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC), time.Date(2026, 3, 21, 10, 0, 1, 0, time.UTC)))
+	reconciler := &Reconciler{
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		executionState: state,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			events <- event
+		},
+	}
+
+	pruned := reconciler.pruneService(context.Background(), "acme/api", "acme", "api", repoPath)
+
+	assert.True(t, pruned)
+	_, err := os.Stat(repoPath)
+	assert.NoError(t, err)
+
+	deadline := time.After(2 * time.Second)
+	foundLocked := false
+	for !foundLocked {
+		select {
+		case event := <-events:
+			if event.Type != core.EventTypeName("stack_locked") {
+				continue
+			}
+			assert.Equal(t, "acme/api", event.Details["full_name"])
+			foundLocked = true
+		case <-deadline:
+			t.Fatal("timed out waiting for stack_locked event")
+		}
+	}
+
+	snapshot, ok := state.snapshot("acme/api")
+	require.True(t, ok)
+	assert.Equal(t, core.ExecutionStatusSucceeded, snapshot.Status)
 }

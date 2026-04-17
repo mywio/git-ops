@@ -89,5 +89,5 @@ func (r *Reconciler) recordCommitChange(ctx context.Context, fullName string, re
 	if !changed {
 		return
 	}
-	publishInternalEvent(ctx, newStackCommitChangedEvent(repo.GetOwner().GetLogin(), repo.GetName(), fullName, stackPath, oldCommit, newCommit, composeChanged))
+	r.publish(ctx, newStackCommitChangedEvent(repo.GetOwner().GetLogin(), repo.GetName(), fullName, stackPath, oldCommit, newCommit, composeChanged))
 }

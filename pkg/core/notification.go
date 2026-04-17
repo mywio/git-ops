@@ -73,7 +73,7 @@ func NewNotificationPayload(event InternalEvent) NotificationPayload {
 		Timestamp: event.Timestamp,
 		Source:    event.Source,
 		Repo:      event.Repo,
-		Message:   event.String,
+		Message:   event.Message,
 		Details:   cloneNotificationDetails(event.Details),
 	}
 
@@ -187,7 +187,7 @@ func notificationExecutionBody(event InternalEvent, payload NotificationPayload)
 
 func notificationPrimaryMessage(event InternalEvent, payload NotificationPayload) string {
 	if event.Type == EventTypeExecution {
-		if msg := strings.TrimSpace(event.String); msg != "" {
+		if msg := strings.TrimSpace(event.Message); msg != "" {
 			return msg
 		}
 		if title := strings.TrimSpace(payload.Title); title != "" {
@@ -195,7 +195,7 @@ func notificationPrimaryMessage(event InternalEvent, payload NotificationPayload
 		}
 		return notificationGenericSummary(event, payload)
 	}
-	if msg := strings.TrimSpace(event.String); msg != "" {
+	if msg := strings.TrimSpace(event.Message); msg != "" {
 		return msg
 	}
 	if title := strings.TrimSpace(payload.Title); title != "" {
@@ -205,7 +205,7 @@ func notificationPrimaryMessage(event InternalEvent, payload NotificationPayload
 }
 
 func notificationExecutionMessage(event InternalEvent, payload NotificationPayload) string {
-	if msg := strings.TrimSpace(event.String); msg != "" {
+	if msg := strings.TrimSpace(event.Message); msg != "" {
 		return msg
 	}
 	return notificationPrimaryMessage(event, payload)
@@ -230,7 +230,7 @@ func notificationGenericBody(event InternalEvent, payload NotificationPayload) s
 	if payload.Repo != "" {
 		lines = append(lines, fmt.Sprintf("Repo: %s", payload.Repo))
 	}
-	if msg := strings.TrimSpace(event.String); msg != "" {
+	if msg := strings.TrimSpace(event.Message); msg != "" {
 		lines = append(lines, fmt.Sprintf("Message: %s", msg))
 	}
 	if len(payload.Details) > 0 {

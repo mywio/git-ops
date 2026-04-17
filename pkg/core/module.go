@@ -15,32 +15,62 @@ import (
 	"time"
 )
 
-// PluginRegistry allows modules to query for other plugins/capabilities.
+// PluginRegistry provides shared runtime services to modules during Init and
+// later execution.
+//
+// ModuleManager implements this interface and passes itself to each module so
+// plugins can discover other plugins, access configuration, publish and
+// subscribe to events, and register HTTP handlers.
 type PluginRegistry interface {
+	// GetPlugin returns a plugin by its registered name.
 	GetPlugin(name string) (Plugin, error)
+	// GetPluginsWithCapability returns all plugins advertising the given capability.
 	GetPluginsWithCapability(cap Capability) []Plugin
+	// ListPlugins returns all registered plugins in registration order.
 	ListPlugins() []Plugin
+	// RegisterEventType declares an event type for validation and discoverability.
 	RegisterEventType(desc EventTypeDesc) error
+	// Publish delivers an event to matching subscribers on this manager's bus.
+	Publish(ctx context.Context, event InternalEvent)
+	// GetMuxServer returns the shared HTTP mux used for core and plugin routes.
 	GetMuxServer() *http.ServeMux
+	// Subscribe registers a listener for an exact event type or wildcard pattern.
 	Subscribe(pattern string, handler Listener)
+	// GetHTTPClient returns the shared HTTP client for outbound requests.
 	GetHTTPClient() *http.Client
+	// GetConfig returns the sectioned configuration map visible to plugins.
 	GetConfig() map[string]map[string]any
 }
 
+// Module is the base lifecycle contract for components managed by ModuleManager.
+//
+// Core modules and plugins implement this interface. Init is called before
+// Start, and Stop is called during shutdown in reverse registration order.
 type Module interface {
+	// Name returns the stable module name used for registration and logging.
 	Name() string
-	// Init receives a PluginRegistry for dependency injection/discovery
+	// Init prepares the module and receives the shared PluginRegistry.
 	Init(ctx context.Context, logger *slog.Logger, registry PluginRegistry) error
+	// Start begins the module's runtime work.
 	Start(ctx context.Context) error
+	// Stop shuts the module down and releases owned resources.
 	Stop(ctx context.Context) error
 }
 
+// Plugin extends Module with metadata, health, and an action-based execution
+// entry point.
+//
+// Dynamically loaded plugins implement this interface and expose an exported
+// symbol named Plugin that resolves to a Plugin value.
 type Plugin interface {
 	Module
+	// Description returns a human-readable summary of the plugin.
 	Description() string
+	// Capabilities returns the plugin capabilities it provides to the system.
 	Capabilities() []Capability
+	// Status reports the current plugin health for APIs and status pages.
 	Status() ServiceStatus
-	// Execute provides a generic entry point for plugin actions
+	// Execute runs a plugin-specific action with free-form parameters.
 	Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error)
 }
 
@@ -50,6 +80,8 @@ type ConfigProvider interface {
 	Config() any
 }
 
+// ModuleManager owns registered modules, shared configuration, the shared HTTP
+// server, and the instance-scoped event bus.
 type ModuleManager struct {
 	modules []Module
 	logger  *slog.Logger
@@ -60,17 +92,61 @@ type ModuleManager struct {
 	configMu   sync.RWMutex
 	config     map[string]map[string]any
 	serverOnce sync.Once
+
+	subscribers   map[string][]Listener
+	subscribersMu sync.RWMutex
+	eventTypes    map[EventTypeName]EventTypeDesc
+	eventTypesMu  sync.RWMutex
 }
 
 func (m *ModuleManager) RegisterEventType(desc EventTypeDesc) error {
-	return registerEventType(desc)
+	m.eventTypesMu.Lock()
+	defer m.eventTypesMu.Unlock()
+
+	if _, exists := m.eventTypes[desc.Name]; exists {
+		return fmt.Errorf("event type %s already registered", desc.Name)
+	}
+	m.eventTypes[desc.Name] = desc
+	return nil
+}
+
+func (m *ModuleManager) Publish(ctx context.Context, event InternalEvent) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	event.Timestamp = time.Now()
+
+	m.eventTypesMu.RLock()
+	desc, ok := m.eventTypes[event.Type]
+	m.eventTypesMu.RUnlock()
+	if ok {
+		for field, spec := range desc.PayloadSpec {
+			if spec.Required {
+				if _, has := event.Details[field]; !has {
+					m.logger.Warn("Published event missing required field", "event_type", event.Type, "field", field)
+				}
+			}
+		}
+	}
+
+	m.subscribersMu.RLock()
+	defer m.subscribersMu.RUnlock()
+
+	for pattern, listeners := range m.subscribers {
+		if matchesPattern(string(event.Type), pattern) {
+			for _, listener := range listeners {
+				go listener(ctx, event)
+			}
+		}
+	}
 }
 
 func (m *ModuleManager) GetMuxServer() *http.ServeMux {
 	return m.mux
 }
 
-// NewModuleManager creates a new ModuleManager instance.
+// NewModuleManager creates a ModuleManager with an initialized HTTP mux, event
+// bus state, and default HTTP client.
 func NewModuleManager(logger *slog.Logger) *ModuleManager {
 	mgr := &ModuleManager{
 		modules: []Module{},
@@ -79,14 +155,18 @@ func NewModuleManager(logger *slog.Logger) *ModuleManager {
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
-		config: map[string]map[string]any{},
+		config:      map[string]map[string]any{},
+		subscribers: map[string][]Listener{},
+		eventTypes:  map[EventTypeName]EventTypeDesc{},
 	}
 	mgr.registerCoreRoutes()
 	return mgr
 }
 
 func (m *ModuleManager) Subscribe(pattern string, handler Listener) {
-	Subscribe(pattern, handler)
+	m.subscribersMu.Lock()
+	defer m.subscribersMu.Unlock()
+	m.subscribers[pattern] = append(m.subscribers[pattern], handler)
 }
 
 func (m *ModuleManager) GetHTTPClient() *http.Client {
@@ -244,7 +324,7 @@ func resolvePluginSymbol(sym any) (Plugin, bool) {
 	return nil, false
 }
 
-// Init initializes all modules in the manager.
+// Init initializes all registered modules in registration order.
 func (m *ModuleManager) Init(ctx context.Context) error {
 	for _, mod := range m.modules {
 		if err := mod.Init(ctx, m.logger.With("module", mod.Name()), m); err != nil {
@@ -254,9 +334,16 @@ func (m *ModuleManager) Init(ctx context.Context) error {
 	return nil
 }
 
-// Start starts all modules in the manager.
+// Start starts the shared HTTP server and then starts all registered modules.
 func (m *ModuleManager) Start(ctx context.Context) {
 	m.startHTTPServer()
+	for _, plug := range m.ListPlugins() {
+		m.logger.Info("Active plugin",
+			"name", plug.Name(),
+			"capabilities", plug.Capabilities(),
+			"status", plug.Status(),
+		)
+	}
 	for _, mod := range m.modules {
 		go func(mod Module) {
 			m.logger.Info("Starting module", "module", mod.Name())
@@ -267,7 +354,8 @@ func (m *ModuleManager) Start(ctx context.Context) {
 	}
 }
 
-// Stop stops all modules in the manager.
+// Stop stops all modules in reverse registration order and then shuts down the
+// shared HTTP server.
 func (m *ModuleManager) Stop(ctx context.Context) {
 	for i := len(m.modules) - 1; i >= 0; i-- {
 		mod := m.modules[i]
@@ -281,6 +369,17 @@ func (m *ModuleManager) Stop(ctx context.Context) {
 			m.logger.Error("HTTP server shutdown failed", "error", err)
 		}
 	}
+}
+
+func matchesPattern(eventType, pattern string) bool {
+	if pattern == eventType {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(eventType, prefix)
+	}
+	return false
 }
 
 // cloneConfigMap creates a deep copy of a configuration map.

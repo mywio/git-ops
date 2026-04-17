@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -377,7 +378,11 @@ func runInspect() {
 	srcPath := filepath.Join(dir, "main.go")
 	require.NoError(t, os.WriteFile(srcPath, src, 0644))
 
-	exePath := filepath.Join(dir, "docker.exe")
+	exeName := "docker"
+	if runtime.GOOS == "windows" {
+		exeName = "docker.exe"
+	}
+	exePath := filepath.Join(dir, exeName)
 	cmd := exec.Command("go", "build", "-o", exePath, srcPath)
 	cmd.Env = append(os.Environ(), "GO111MODULE=off")
 	output, err := cmd.CombinedOutput()

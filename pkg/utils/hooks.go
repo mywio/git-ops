@@ -1,16 +1,20 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-// ExecuteHooks runs all executable scripts in a specific directory (lexical order)
-func ExecuteHooks(dir string, env []string, logger *slog.Logger) error {
+// ExecuteHooks runs all executable scripts in a specific directory in lexical order.
+//
+// Each script receives its own timeout budget derived from the parent context.
+func ExecuteHooks(ctx context.Context, dir string, env []string, logger *slog.Logger, timeout time.Duration) error {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil // No hooks dir, that's fine
@@ -27,12 +31,23 @@ func ExecuteHooks(dir string, env []string, logger *slog.Logger) error {
 		scriptPath := filepath.Join(dir, entry.Name())
 		logger.Info("Running hook", "script", entry.Name())
 
-		cmd := exec.Command(scriptPath)
+		hookCtx := ctx
+		cancel := func() {}
+		if timeout > 0 {
+			hookCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+
+		cmd := exec.CommandContext(hookCtx, scriptPath)
 		cmd.Env = append(os.Environ(), env...) // Pass custom env vars
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
-		if err := cmd.Run(); err != nil {
+		err := cmd.Run()
+		cancel()
+		if err != nil {
+			if errors := hookCtx.Err(); errors != nil {
+				return fmt.Errorf("hook %s failed: %w", entry.Name(), errors)
+			}
 			return fmt.Errorf("hook %s failed: %w", entry.Name(), err)
 		}
 	}

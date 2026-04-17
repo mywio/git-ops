@@ -36,6 +36,7 @@ func (r *composeRunnerPluginRegistry) GetPluginsWithCapability(cap core.Capabili
 }
 func (r *composeRunnerPluginRegistry) ListPlugins() []core.Plugin { return r.plugins }
 func (r *composeRunnerPluginRegistry) RegisterEventType(desc core.EventTypeDesc) error { return nil }
+func (r *composeRunnerPluginRegistry) Publish(ctx context.Context, event core.InternalEvent) {}
 func (r *composeRunnerPluginRegistry) GetMuxServer() *http.ServeMux { return nil }
 func (r *composeRunnerPluginRegistry) Subscribe(pattern string, handler core.Listener) {}
 func (r *composeRunnerPluginRegistry) GetHTTPClient() *http.Client { return nil }

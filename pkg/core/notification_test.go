@@ -15,7 +15,7 @@ func TestNewNotificationPayloadForExecutionEvent(t *testing.T) {
 		Timestamp: timestamp,
 		Source:    "reconciler",
 		Repo:      "api",
-		String:    "Execution failed while applying hooks",
+		Message:   "Execution failed while applying hooks",
 		Details: map[string]any{
 			"execution_id":   "exec-1",
 			"owner":          "acme",
@@ -55,7 +55,7 @@ func TestNewNotificationPayloadForGenericEvent(t *testing.T) {
 		Timestamp: timestamp,
 		Source:    "reconciler",
 		Repo:      "api",
-		String:    "Secret DATABASE_URL already provided by env; skipping vault",
+		Message:   "Secret DATABASE_URL already provided by env; skipping vault",
 		Details: map[string]any{
 			"key":    "DATABASE_URL",
 			"winner": "env",
@@ -71,7 +71,7 @@ func TestNewNotificationPayloadForGenericEvent(t *testing.T) {
 	assert.Equal(t, "api", payload.Repo)
 	assert.Contains(t, payload.Title, "notify_secret_conflict")
 	assert.Contains(t, payload.Title, "reconciler/api")
-	assert.Equal(t, event.String, payload.Message)
+	assert.Equal(t, event.Message, payload.Message)
 	assert.Empty(t, payload.ExecutionID)
 	assert.Empty(t, payload.FullName)
 	assert.Empty(t, payload.Stage)
@@ -95,7 +95,7 @@ func TestNotificationPayloadOmitsZeroTimestampWhenMarshaled(t *testing.T) {
 		Type:   "notify_secret_conflict",
 		Source: "reconciler",
 		Repo:   "api",
-		String: "Secret DATABASE_URL already provided by env; skipping vault",
+		Message: "Secret DATABASE_URL already provided by env; skipping vault",
 		Details: map[string]any{
 			"key":    "DATABASE_URL",
 			"winner": "env",
@@ -106,4 +106,38 @@ func TestNotificationPayloadOmitsZeroTimestampWhenMarshaled(t *testing.T) {
 	raw, err := json.Marshal(payload)
 	assert.NoError(t, err)
 	assert.NotContains(t, string(raw), "\"timestamp\"")
+}
+
+func TestNewNotificationPayloadForComposeEnvPersistenceRiskEvent(t *testing.T) {
+	timestamp := time.Date(2026, time.March, 21, 11, 30, 0, 0, time.UTC)
+	event := InternalEvent{
+		Type:      "notify_compose_env_persistence_risk",
+		Timestamp: timestamp,
+		Source:    "reconciler",
+		Repo:      "api",
+		Message:   "Compose env persistence risk detected for acme/api: 2 finding(s) across 1 service(s)",
+		Details: map[string]any{
+			"owner":      "acme",
+			"repo":       "api",
+			"full_name":  "acme/api",
+			"services":   []string{"api"},
+			"keys":       []string{"API_TOKEN", "DB_PASSWORD"},
+			"risk_count": 2,
+			"findings": []map[string]any{
+				{"service": "api", "key": "API_TOKEN", "reason": "referenced in compose but not mapped into the service runtime environment"},
+				{"service": "api", "key": "DB_PASSWORD", "reason": "referenced in compose but not mapped into the service runtime environment"},
+			},
+		},
+	}
+
+	payload := NewNotificationPayload(event)
+
+	assert.Equal(t, EventTypeName("notify_compose_env_persistence_risk"), payload.EventType)
+	assert.Equal(t, timestamp, payload.Timestamp)
+	assert.Equal(t, event.Message, payload.Message)
+	assert.Contains(t, payload.Title, "notify_compose_env_persistence_risk")
+	assert.Contains(t, payload.Body, "Event Type: notify_compose_env_persistence_risk")
+	assert.Contains(t, payload.Body, "acme/api")
+	assert.Contains(t, payload.Body, "API_TOKEN")
+	assert.Contains(t, payload.Body, "DB_PASSWORD")
 }

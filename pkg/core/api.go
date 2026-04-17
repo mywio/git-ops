@@ -8,11 +8,12 @@ import (
 )
 
 type pluginInfo struct {
-	Name         string       `json:"name"`
-	Description  string       `json:"description,omitempty"`
-	Capabilities []Capability `json:"capabilities,omitempty"`
+	Name         string        `json:"name"`
+	Description  string        `json:"description,omitempty"`
+	Capabilities []Capability  `json:"capabilities,omitempty"`
 	Status       ServiceStatus `json:"status,omitempty"`
-	Config       any          `json:"config,omitempty"`
+	Version      string        `json:"version,omitempty"`
+	Config       any           `json:"config,omitempty"`
 }
 
 func (m *ModuleManager) registerCoreRoutes() {
@@ -59,6 +60,7 @@ func buildPluginInfo(plug Plugin, includeConfig bool) pluginInfo {
 		Description:  plug.Description(),
 		Capabilities: plug.Capabilities(),
 		Status:       plug.Status(),
+		Version:      Version,
 	}
 	if includeConfig {
 		if cfg, ok := plug.(ConfigProvider); ok {

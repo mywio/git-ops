@@ -266,7 +266,7 @@ func (s *sqliteStore) Save(event core.InternalEvent) error {
 		sql.NullString{String: fields.LastError, Valid: isExecutionEvent || fields.LastError != ""},
 		sql.NullString{String: fields.FailureClass, Valid: isExecutionEvent || fields.FailureClass != ""},
 		detailsStr,
-		event.String,
+		event.Message,
 	)
 	return err
 }
@@ -340,7 +340,7 @@ func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, or
 			ev.Repo = repoStr.String
 		}
 		if stringVal.Valid {
-			ev.String = stringVal.String
+			ev.Message = stringVal.String
 		}
 		if detailsStr.Valid {
 			if err := json.Unmarshal([]byte(detailsStr.String), &ev.Details); err != nil {

@@ -1,7 +1,8 @@
 package core
 
-// RuntimeFile is materialized by core before docker compose execution, then
-// exposed as an environment variable pointing to the generated file path.
+// RuntimeFile describes a file that core materializes before docker compose
+// execution and exposes through an environment variable pointing at the file
+// path.
 type RuntimeFile struct {
 	EnvKey   string `json:"env_key"`
 	Filename string `json:"filename,omitempty"`

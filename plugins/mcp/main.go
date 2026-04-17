@@ -357,7 +357,7 @@ func (p *MCPPlugin) handleDeployEvent(ctx context.Context, event core.InternalEv
 		Owner:     owner,
 		Repo:      repo,
 		Status:    string(event.Type),
-		Message:   event.String,
+		Message:   event.Message,
 		UpdatedAt: event.Timestamp,
 		Source:    event.Source,
 	}

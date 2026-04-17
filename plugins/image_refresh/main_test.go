@@ -26,6 +26,7 @@ func (m *imageRefreshMockRegistry) RegisterEventType(desc core.EventTypeDesc) er
 	m.registered = append(m.registered, desc)
 	return nil
 }
+func (m *imageRefreshMockRegistry) Publish(ctx context.Context, event core.InternalEvent) {}
 func (m *imageRefreshMockRegistry) GetMuxServer() *http.ServeMux { return nil }
 func (m *imageRefreshMockRegistry) Subscribe(pattern string, handler core.Listener) {
 	if m.subs == nil { m.subs = map[string]core.Listener{} }
@@ -76,13 +77,15 @@ func TestImageRefreshPluginSchedulesJobForComposeUnchangedCommitEvent(t *testing
 
 func TestImageRefreshPluginEmitsScheduledEventWithRequiredFields(t *testing.T) {
 	events := make(chan core.InternalEvent, 2)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) { events <- event }
-	defer func() { publishInternalEvent = originalPublish }()
 
 	registry := &imageRefreshMockRegistry{cfg: map[string]map[string]any{"image_refresh": {"enabled": true, "retry_delays_minutes": []any{0.0, 1.0}}}}
 	recorder := &scheduledRequestRecorder{}
-	plugin := &ImageRefreshPlugin{jobs: recorder}
+	plugin := &ImageRefreshPlugin{
+		jobs: recorder,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			events <- event
+		},
+	}
 	require.NoError(t, plugin.Init(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), registry))
 	require.NoError(t, plugin.Start(context.Background()))
 

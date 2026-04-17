@@ -48,6 +48,7 @@ func TestPluginsAPIList_NoConfig(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, out, 1)
 	assert.Equal(t, "test", out[0].Name)
+	assert.Equal(t, Version, out[0].Version)
 	assert.Nil(t, out[0].Config)
 }
 
@@ -66,6 +67,7 @@ func TestPluginsAPIList_WithConfig(t *testing.T) {
 	err := json.NewDecoder(rr.Body).Decode(&out)
 	assert.NoError(t, err)
 	assert.Len(t, out, 1)
+	assert.Equal(t, Version, out[0].Version)
 	cfg, ok := out[0].Config.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "REDACTED", cfg["token"])
@@ -86,6 +88,7 @@ func TestPluginsAPIDetail(t *testing.T) {
 	err := json.NewDecoder(rr.Body).Decode(&out)
 	assert.NoError(t, err)
 	assert.Equal(t, "test", out.Name)
+	assert.Equal(t, Version, out.Version)
 	cfg, ok := out.Config.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "REDACTED", cfg["token"])

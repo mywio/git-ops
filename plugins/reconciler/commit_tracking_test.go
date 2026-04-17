@@ -98,18 +98,14 @@ func TestCommitTrackerUsesTopLevelTimestampAndSourceInsteadOfDetailsFields(t *te
 func newCommitTrackingTestReconciler(t *testing.T) (*Reconciler, chan core.InternalEvent) {
 	t.Helper()
 	events := make(chan core.InternalEvent, 10)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) {
-		events <- event
-	}
-	t.Cleanup(func() {
-		publishInternalEvent = originalPublish
-	})
 
 	return &Reconciler{
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		executionState: newExecutionStateManager(fixedTimes(time.Date(2026, 3, 22, 10, 0, 0, 0, time.UTC), time.Date(2026, 3, 22, 10, 0, 1, 0, time.UTC), time.Date(2026, 3, 22, 10, 0, 2, 0, time.UTC))),
 		commitTracker:  newCommitTracker(),
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			events <- event
+		},
 	}, events
 }
 

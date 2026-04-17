@@ -141,7 +141,7 @@ func TestWebhookSendKeepsLegacyMessageAndDetailsFields(t *testing.T) {
 		Type:   core.EventTypeExecution,
 		Source: "reconciler",
 		Repo:   "api",
-		String: "Execution failed while applying hooks",
+		Message: "Execution failed while applying hooks",
 		Timestamp: time.Time{},
 		Details: map[string]any{
 			"execution_id": "exec-1",

@@ -9,21 +9,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config is the legacy typed core configuration used by the main runtime and
+// older plugins.
 type Config struct {
 	Token          string
 	Users          []string
-	Topic          string
+	Topics         []string
 	TargetDir      string
 	Interval       time.Duration
+	HookTimeout    time.Duration
 	GlobalHooksDir string
 	DryRun         bool
 	SecretsDir     string // Directory to look for secret files
 }
 
+// LoadConfig reads the legacy typed core configuration directly from
+// environment variables.
 func LoadConfig() Config {
 	interval, _ := time.ParseDuration(os.Getenv("SYNC_INTERVAL"))
 	if interval == 0 {
 		interval = 5 * time.Minute
+	}
+	hookTimeout, _ := time.ParseDuration(os.Getenv("HOOK_TIMEOUT"))
+	if hookTimeout == 0 {
+		hookTimeout = 5 * time.Minute
 	}
 
 	usersStr := os.Getenv("GITHUB_USERS") // Expect comma-separated: "user1,org2,user3"
@@ -35,9 +44,10 @@ func LoadConfig() Config {
 	return Config{
 		Token:          os.Getenv("GITHUB_TOKEN"),
 		Users:          users,
-		Topic:          os.Getenv("TOPIC_FILTER"),
+		Topics:         splitAndTrim(os.Getenv("TOPIC_FILTER")),
 		TargetDir:      os.Getenv("TARGET_DIR"),
 		Interval:       interval,
+		HookTimeout:    hookTimeout,
 		DryRun:         os.Getenv("DRY_RUN") == "true",
 		GlobalHooksDir: os.Getenv("GLOBAL_HOOKS_DIR"),
 		SecretsDir:     os.Getenv("SECRETS_DIR"),
@@ -84,6 +94,7 @@ func LoadConfigMapFromEnv() ConfigMap {
 			"topic":            os.Getenv("TOPIC_FILTER"),
 			"target_dir":       os.Getenv("TARGET_DIR"),
 			"interval":         os.Getenv("SYNC_INTERVAL"),
+			"hook_timeout":     os.Getenv("HOOK_TIMEOUT"),
 			"dry_run":          os.Getenv("DRY_RUN"),
 			"global_hooks_dir": os.Getenv("GLOBAL_HOOKS_DIR"),
 			"secrets_dir":      os.Getenv("SECRETS_DIR"),
@@ -119,7 +130,7 @@ func LoadConfigMapFromEnv() ConfigMap {
 }
 
 // LoadConfigFromMap builds a core Config from a map.
-// Supported keys (yaml): token, users, topic, target_dir, interval, dry_run, global_hooks_dir, secrets_dir.
+// Supported keys (yaml): token, users, topic, target_dir, interval, hook_timeout, dry_run, global_hooks_dir, secrets_dir.
 func LoadConfigFromMap(m map[string]any) Config {
 	cfg := Config{}
 
@@ -129,14 +140,17 @@ func LoadConfigFromMap(m map[string]any) Config {
 	if v, ok := getStringSlice(m, "users", "github_users"); ok {
 		cfg.Users = v
 	}
-	if v, ok := getString(m, "topic", "topic_filter"); ok {
-		cfg.Topic = v
+	if v, ok := getStringSlice(m, "topic", "topic_filter"); ok {
+		cfg.Topics = v
 	}
 	if v, ok := getString(m, "target_dir"); ok {
 		cfg.TargetDir = v
 	}
 	if v, ok := getDuration(m, "interval", "sync_interval"); ok {
 		cfg.Interval = v
+	}
+	if v, ok := getDuration(m, "hook_timeout"); ok {
+		cfg.HookTimeout = v
 	}
 	if v, ok := getBool(m, "dry_run"); ok {
 		cfg.DryRun = v
@@ -151,11 +165,15 @@ func LoadConfigFromMap(m map[string]any) Config {
 	if cfg.Interval == 0 {
 		cfg.Interval = 5 * time.Minute
 	}
+	if cfg.HookTimeout == 0 {
+		cfg.HookTimeout = 5 * time.Minute
+	}
 
 	return cfg
 }
 
-// MergeConfig uses primary values when set, otherwise falls back.
+// MergeConfig overlays primary over fallback, using fallback values only when
+// the corresponding primary value is unset.
 func MergeConfig(primary, fallback Config) Config {
 	out := primary
 	if out.Token == "" {
@@ -164,14 +182,17 @@ func MergeConfig(primary, fallback Config) Config {
 	if len(out.Users) == 0 {
 		out.Users = fallback.Users
 	}
-	if out.Topic == "" {
-		out.Topic = fallback.Topic
+	if len(out.Topics) == 0 {
+		out.Topics = fallback.Topics
 	}
 	if out.TargetDir == "" {
 		out.TargetDir = fallback.TargetDir
 	}
 	if out.Interval == 0 {
 		out.Interval = fallback.Interval
+	}
+	if out.HookTimeout == 0 {
+		out.HookTimeout = fallback.HookTimeout
 	}
 	if out.GlobalHooksDir == "" {
 		out.GlobalHooksDir = fallback.GlobalHooksDir
@@ -216,6 +237,18 @@ func cloneConfigMap(src ConfigMap) ConfigMap {
 		dst[section] = sectionCopy
 	}
 	return dst
+}
+
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func normalizeConfigMap(raw map[string]any) ConfigMap {

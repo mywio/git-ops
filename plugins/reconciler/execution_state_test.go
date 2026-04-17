@@ -77,6 +77,58 @@ func TestExecutionStateCompletesAndAllowsFutureRuns(t *testing.T) {
 	assert.Equal(t, core.ExecutionStatusSucceeded, succeeded.Status)
 	assert.Equal(t, core.ExecutionStageComplete, succeeded.Stage)
 	assert.Empty(t, succeeded.LastError)
+
+	history := state.snapshotHistory("acme/api")
+	require.Len(t, history, 2)
+	assert.Equal(t, second.ExecutionID, history[0].ExecutionID)
+	assert.Equal(t, core.ExecutionStatusSucceeded, history[0].Status)
+	assert.Equal(t, first.ExecutionID, history[1].ExecutionID)
+	assert.Equal(t, core.ExecutionStatusFailed, history[1].Status)
+}
+
+func TestExecutionStateHistoryCapsAtTenEntriesPerStack(t *testing.T) {
+	times := make([]time.Time, 0, 36)
+	base := time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 36; i++ {
+		times = append(times, base.Add(time.Duration(i)*time.Second))
+	}
+	state := newExecutionStateManager(fixedTimes(times...))
+
+	for i := 0; i < 12; i++ {
+		snapshot, acquired := state.acquire("acme/api", "acme", "api", "node-a", "reconcile_stack")
+		require.True(t, acquired)
+
+		_, ok := state.markSucceeded("acme/api", core.ExecutionStageComplete)
+		require.True(t, ok)
+		assert.Contains(t, snapshot.ExecutionID, "acme/api-")
+	}
+
+	history := state.snapshotHistory("acme/api")
+	require.Len(t, history, 10)
+	assert.Equal(t, core.ExecutionStatusSucceeded, history[0].Status)
+	assert.Equal(t, core.ExecutionStatusSucceeded, history[9].Status)
+	assert.True(t, history[0].UpdatedAt.After(history[9].UpdatedAt))
+}
+
+func TestSnapshotHistoryReturnsCopy(t *testing.T) {
+	now := fixedTimes(
+		time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 3, 21, 10, 0, 1, 0, time.UTC),
+	)
+	state := newExecutionStateManager(now)
+
+	_, acquired := state.acquire("acme/api", "acme", "api", "node-a", "manual")
+	require.True(t, acquired)
+	_, ok := state.markSucceeded("acme/api", core.ExecutionStageComplete)
+	require.True(t, ok)
+
+	history := state.snapshotHistory("acme/api")
+	require.Len(t, history, 1)
+	history[0].Status = core.ExecutionStatusFailed
+
+	again := state.snapshotHistory("acme/api")
+	require.Len(t, again, 1)
+	assert.Equal(t, core.ExecutionStatusSucceeded, again[0].Status)
 }
 
 func TestListManagedDeploymentsIncludesExecutionMetadata(t *testing.T) {
@@ -113,24 +165,216 @@ func TestListManagedDeploymentsIncludesExecutionMetadata(t *testing.T) {
 	assert.Equal(t, string(core.ExecutionStatusFailed), entry["execution_status"])
 	assert.Equal(t, string(core.ExecutionStageComposeUp), entry["execution_stage"])
 	assert.Equal(t, "compose failed", entry["last_error"])
+	history, ok := entry["history"].([]executionSnapshot)
+	require.True(t, ok)
+	require.Len(t, history, 1)
+	assert.Equal(t, snapshot.ExecutionID, history[0].ExecutionID)
+	assert.Equal(t, core.ExecutionStatusFailed, history[0].Status)
+}
+
+func TestListManagedDeploymentsParsesComposeStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		containers []composePSContainer
+		wantStatus string
+	}{
+		{
+			name: "all running",
+			containers: []composePSContainer{
+				{State: "running"},
+				{State: "running"},
+			},
+			wantStatus: "running",
+		},
+		{
+			name: "partial running",
+			containers: []composePSContainer{
+				{State: "running"},
+				{State: "exited"},
+			},
+			wantStatus: "partial",
+		},
+		{
+			name: "all stopped",
+			containers: []composePSContainer{
+				{State: "exited"},
+				{State: "created"},
+			},
+			wantStatus: "stopped",
+		},
+		{
+			name:       "no parsed containers",
+			containers: nil,
+			wantStatus: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targetDir := t.TempDir()
+			repoPath := filepath.Join(targetDir, "acme", "api")
+			require.NoError(t, os.MkdirAll(repoPath, 0755))
+
+			originalListComposePSContainers := listComposePSContainers
+			listComposePSContainers = func(path string) ([]composePSContainer, error) {
+				assert.Equal(t, repoPath, path)
+				return tt.containers, nil
+			}
+			defer func() {
+				listComposePSContainers = originalListComposePSContainers
+			}()
+
+			reconciler := &Reconciler{
+				cfg:    config.Config{TargetDir: targetDir},
+				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			}
+
+			deployments, err := reconciler.listManagedDeployments()
+			require.NoError(t, err)
+			require.Len(t, deployments, 1)
+			assert.Equal(t, tt.wantStatus, deployments[0]["status"])
+		})
+	}
+}
+
+func TestParseComposePSOutputIgnoresMalformedLines(t *testing.T) {
+	out := []byte("{\"State\":\"running\"}\nnot-json\n{\"State\":\"exited\"}\n")
+
+	containers := parseComposePSOutput(out)
+
+	require.Len(t, containers, 2)
+	assert.Equal(t, []composePSContainer{
+		{State: "running"},
+		{State: "exited"},
+	}, containers)
+}
+
+func TestHealthContainersFromComposeUsesNameThenService(t *testing.T) {
+	containers := []composePSContainer{
+		{Name: "web-1", State: "running"},
+		{Service: "db", State: "exited"},
+		{State: "created"},
+	}
+
+	health := healthContainersFromCompose(containers)
+
+	require.Len(t, health, 3)
+	// healthContainersFromCompose sorts by normalized container name for stable comparisons.
+	assert.Equal(t, "db", health[0].Name)
+	assert.Equal(t, "created", health[1].State)
+	assert.Equal(t, "unknown", health[1].Name)
+	assert.Equal(t, "web-1", health[2].Name)
+}
+
+func TestPollStackHealthPublishesOnlyOnChange(t *testing.T) {
+	targetDir := t.TempDir()
+	repoPath := filepath.Join(targetDir, "acme", "api")
+	require.NoError(t, os.MkdirAll(repoPath, 0755))
+
+	originalListComposePSContainers := listComposePSContainers
+	defer func() {
+		listComposePSContainers = originalListComposePSContainers
+	}()
+
+	call := 0
+	listComposePSContainers = func(path string) ([]composePSContainer, error) {
+		assert.Equal(t, repoPath, path)
+		call++
+		switch call {
+		case 1, 2, 3, 4:
+			return []composePSContainer{{Name: "web-1", State: "running"}}, nil
+		case 5, 6:
+			return []composePSContainer{{Name: "web-1", State: "exited"}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected call")
+		}
+	}
+
+	events := make(chan core.InternalEvent, 4)
+	reconciler := &Reconciler{
+		cfg:    config.Config{TargetDir: targetDir},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Type == "stack_health" {
+				events <- event
+			}
+		},
+		lastHealth: make(map[string]stackHealthSnapshot),
+	}
+
+	reconciler.pollStackHealth(context.Background())
+	reconciler.pollStackHealth(context.Background())
+	reconciler.pollStackHealth(context.Background())
+
+	close(events)
+	var published []core.InternalEvent
+	for event := range events {
+		published = append(published, event)
+	}
+
+	require.Len(t, published, 2)
+	assert.Equal(t, "running", published[0].Details["status"])
+	assert.Equal(t, "stopped", published[1].Details["status"])
+
+	containers, ok := published[1].Details["containers"].([]map[string]string)
+	require.True(t, ok)
+	require.Len(t, containers, 1)
+	assert.Equal(t, "web-1", containers[0]["name"])
+	assert.Equal(t, "exited", containers[0]["state"])
+}
+
+func TestPollStackHealthPublishesUnknownOnComposeError(t *testing.T) {
+	targetDir := t.TempDir()
+	repoPath := filepath.Join(targetDir, "acme", "api")
+	require.NoError(t, os.MkdirAll(repoPath, 0755))
+
+	originalListComposePSContainers := listComposePSContainers
+	defer func() {
+		listComposePSContainers = originalListComposePSContainers
+	}()
+
+	listComposePSContainers = func(path string) ([]composePSContainer, error) {
+		assert.Equal(t, repoPath, path)
+		return nil, errors.New("compose unavailable")
+	}
+
+	events := make(chan core.InternalEvent, 1)
+	reconciler := &Reconciler{
+		cfg:    config.Config{TargetDir: targetDir},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Type == "stack_health" {
+				events <- event
+			}
+		},
+		lastHealth: make(map[string]stackHealthSnapshot),
+	}
+
+	reconciler.pollStackHealth(context.Background())
+
+	select {
+	case event := <-events:
+		assert.Equal(t, "unknown", event.Details["status"])
+		containers, ok := event.Details["containers"].([]map[string]string)
+		require.True(t, ok)
+		assert.Len(t, containers, 0)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stack_health event")
+	}
 }
 
 func TestFailExecutionPublishesFailedLifecycleWithUnknownFailureClassification(t *testing.T) {
 	executionID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
 	events := make(chan core.InternalEvent, 1)
-	originalPublish := publishInternalEvent
-	publishInternalEvent = func(_ context.Context, event core.InternalEvent) {
-		if event.Details["execution_id"] == executionID {
-			events <- event
-		}
-	}
-	defer func() {
-		publishInternalEvent = originalPublish
-	}()
 
 	state := newExecutionStateManager(fixedTimes(time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)))
 	reconciler := &Reconciler{
 		executionState: state,
+		publishEvent: func(_ context.Context, event core.InternalEvent) {
+			if event.Details["execution_id"] == executionID {
+				events <- event
+			}
+		},
 	}
 	_, acquired := state.acquire("acme/api", "acme", "api", "node-a", "manual")
 	require.True(t, acquired)

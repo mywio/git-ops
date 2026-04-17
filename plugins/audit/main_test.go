@@ -215,6 +215,7 @@ func (m *mockRegistry) GetPlugin(name string) (core.Plugin, error)              
 func (m *mockRegistry) GetPluginsWithCapability(cap core.Capability) []core.Plugin { return nil }
 func (m *mockRegistry) ListPlugins() []core.Plugin                                 { return nil }
 func (m *mockRegistry) RegisterEventType(desc core.EventTypeDesc) error            { return nil }
+func (m *mockRegistry) Publish(ctx context.Context, event core.InternalEvent)      {}
 func (m *mockRegistry) GetMuxServer() *http.ServeMux                               { return nil }
 func (m *mockRegistry) Subscribe(pattern string, handler core.Listener) {
 	if m.subs == nil {

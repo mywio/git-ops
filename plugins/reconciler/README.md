@@ -10,12 +10,24 @@ Config section: `core` (shared with main configuration)
 
 On each sync interval the reconciler builds three lists:
 
-1. **Desired** - repos matching `user:<name> topic:<TOPIC_FILTER> archived:false`
+1. **Desired** - repos matching `user:<name> topic:<configured-topic> archived:false` for any configured topic in `TOPIC_FILTER`
 2. **Removal (explicit)** - repos tagged `git-ops-remove`
-3. **Removal (archived)** - repos matching the topic filter but with `archived:true`
+3. **Removal (archived)** - repos matching any configured topic but with `archived:true`
 
 Local stacks that are in the removal list are brought down and deleted.
 Local stacks not found in any GitHub query produce a warning but are **not** automatically deleted (divergence guard).
+
+## Hooks
+
+Repository and global hook scripts receive only service context variables:
+
+- `REPO_NAME`
+- `REPO_OWNER`
+- `TARGET_DIR`
+
+Forwarded secrets are intentionally not injected into hook environments. If a
+hook needs credentials, it must source them independently, for example from a
+secrets manager integration or from files materialized by a runtime-file plugin.
 
 ## Events
 

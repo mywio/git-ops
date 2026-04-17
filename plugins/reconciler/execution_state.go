@@ -28,6 +28,7 @@ type executionStateManager struct {
 	mu        sync.RWMutex
 	now       func() time.Time
 	snapshots map[string]executionSnapshot
+	history   map[string][]executionSnapshot
 }
 
 func newExecutionStateManager(now func() time.Time) *executionStateManager {
@@ -37,6 +38,7 @@ func newExecutionStateManager(now func() time.Time) *executionStateManager {
 	return &executionStateManager{
 		now:       now,
 		snapshots: make(map[string]executionSnapshot),
+		history:   make(map[string][]executionSnapshot),
 	}
 }
 
@@ -108,6 +110,7 @@ func (m *executionStateManager) markFailed(fullName string, stage core.Execution
 	snapshot.Active = false
 
 	m.snapshots[fullName] = snapshot
+	m.appendHistory(fullName, snapshot)
 	return snapshot, true
 }
 
@@ -127,6 +130,7 @@ func (m *executionStateManager) markSucceeded(fullName string, stage core.Execut
 	snapshot.Active = false
 
 	m.snapshots[fullName] = snapshot
+	m.appendHistory(fullName, snapshot)
 	return snapshot, true
 }
 
@@ -136,4 +140,32 @@ func (m *executionStateManager) snapshot(fullName string) (executionSnapshot, bo
 
 	snapshot, ok := m.snapshots[fullName]
 	return snapshot, ok
+}
+
+// snapshotHistory returns completed executions for a stack in newest-first order.
+func (m *executionStateManager) snapshotHistory(fullName string) []executionSnapshot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	history := m.history[fullName]
+	if len(history) == 0 {
+		return nil
+	}
+
+	out := make([]executionSnapshot, 0, len(history))
+	for i := len(history) - 1; i >= 0; i-- {
+		out = append(out, history[i])
+	}
+	return out
+}
+
+// appendHistory must be called with m.mu held.
+func (m *executionStateManager) appendHistory(fullName string, snapshot executionSnapshot) {
+	const maxHistoryEntries = 10
+
+	history := append(m.history[fullName], snapshot)
+	if len(history) > maxHistoryEntries {
+		history = history[len(history)-maxHistoryEntries:]
+	}
+	m.history[fullName] = history
 }

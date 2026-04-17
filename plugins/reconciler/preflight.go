@@ -18,6 +18,8 @@ var (
 	errRuntimeFilesNotMaterialized = errors.New("runtime files not materialized")
 )
 
+var localComposeFilenames = []string{"compose.yaml", "docker-compose.yml"}
+
 type composeCommandError struct {
 	args   []string
 	output string
@@ -57,16 +59,9 @@ var executeComposeCommand = func(repoLocalPath string, cmdEnv, runtimeFileEnv []
 }
 
 func runComposePreflight(repoLocalPath string, runtimeFileEnv []string) error {
-	composePath := filepath.Join(repoLocalPath, "docker-compose.yml")
-	info, err := os.Stat(composePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %s", errComposeFileMissing, composePath)
-		}
-		return fmt.Errorf("%w: %s: %w", errComposeFileMissing, composePath, err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%w: %s is a directory", errComposeFileMissing, composePath)
+	// Verify a compose file exists; Docker Compose discovers it by name at runtime.
+	if _, err := localComposeFilePath(repoLocalPath); err != nil {
+		return err
 	}
 
 	if err := ensureDirectoryWritable(repoLocalPath); err != nil {
@@ -76,6 +71,25 @@ func runComposePreflight(repoLocalPath string, runtimeFileEnv []string) error {
 		return err
 	}
 	return nil
+}
+
+func localComposeFilePath(repoLocalPath string) (string, error) {
+	for _, filename := range localComposeFilenames {
+		composePath := filepath.Join(repoLocalPath, filename)
+		info, err := os.Stat(composePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("%w: %s: %w", errComposeFileMissing, composePath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("%w: %s is a directory", errComposeFileMissing, composePath)
+		}
+		return composePath, nil
+	}
+
+	return "", fmt.Errorf("%w: %s", errComposeFileMissing, filepath.Join(repoLocalPath, localComposeFilenames[0]))
 }
 
 func ensureDirectoryWritable(dir string) error {

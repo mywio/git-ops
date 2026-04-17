@@ -38,7 +38,7 @@ func TestPushoverIntegration_FromEnv(t *testing.T) {
 		Type:   "notify_integration_test",
 		Source: "test",
 		Repo:   "repo",
-		String: "hello from integration test",
+		Message: "hello from integration test",
 		Details: map[string]interface{}{
 			"key": "value",
 		},

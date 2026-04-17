@@ -35,14 +35,13 @@ type imageRefreshConfig struct {
 type ImageRefreshPlugin struct {
 	logger      *slog.Logger
 	registry    core.PluginRegistry
+	publishEvent func(context.Context, core.InternalEvent)
 	jobs        imageRefreshScheduler
 	enabled     bool
 	retryDelays []time.Duration
 }
 
 var Plugin core.Plugin = &ImageRefreshPlugin{}
-
-var publishInternalEvent = core.Publish
 
 func (p *ImageRefreshPlugin) Name() string {
 	return "image_refresh"
@@ -66,6 +65,9 @@ func (p *ImageRefreshPlugin) Status() core.ServiceStatus {
 func (p *ImageRefreshPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
 	p.registry = registry
+	if p.publishEvent == nil && registry != nil {
+		p.publishEvent = registry.Publish
+	}
 
 	cfg := imageRefreshConfig{
 		RetryDelaysMinutes: []float64{0, 1, 2, 4, 8},
@@ -207,12 +209,14 @@ func (p *ImageRefreshPlugin) publishLifecycleEvent(ctx context.Context, eventTyp
 		details["message"] = message
 	}
 
-	publishInternalEvent(ctx, core.InternalEvent{
+	if p.publishEvent != nil {
+		p.publishEvent(ctx, core.InternalEvent{
 		Type:      eventType,
 		Source:    p.Name(),
 		Timestamp: time.Now().UTC(),
 		Details:   details,
-	})
+		})
+	}
 }
 
 func retryDurations(minutes []float64) []time.Duration {
