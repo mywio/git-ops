@@ -25,6 +25,24 @@ make plugins  # Builds plugins
 - New Environment Variable: `PLUGINS_DIR` (defaults to `./plugins`).
 - Ensure the `plugins/` directory (or wherever `PLUGINS_DIR` points to) contains the built `.so` files alongside the `git-ops` binary.
 
+## Multi-topic Topic Filter
+
+`TOPIC_FILTER` now accepts a comma-separated list of GitHub topics instead of a single value.
+
+Previously:
+```bash
+TOPIC_FILTER=homelab-server-1
+```
+
+Now:
+```bash
+TOPIC_FILTER=homelab-server-1,prod
+```
+
+YAML configuration remains backward compatible:
+- `topic: "homelab-server-1"` still works
+- `topic: ["homelab-server-1", "prod"]` is also supported
+
 ### Running
 ```bash
 ./bin/git-ops

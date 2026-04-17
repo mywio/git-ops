@@ -23,7 +23,7 @@ Create a YAML config file (default `config.yaml` or set `CONFIG_FILE`):
 core:
   token: "ghp_123..."
   users: ["myuser", "myorg"]
-  topic: "homelab-server-1"
+  topic: ["homelab-server-1", "prod"]
   target_dir: "/opt/stacks"
   interval: "5m"
   plugins_dir: "./bin/plugins"
@@ -45,8 +45,11 @@ google_secret_manager:
 ```
 
 Notes:
-- `env_forwarder` reads environment variables from the host. Ensure they are set
-  in the service environment (see systemd example below).
+- `env_forwarder` reads environment variables from the host, then snapshots the
+  allowlisted values to `TARGET_DIR/.git-ops/env_forwarder_snapshot.json` so
+  restarts can reuse them if the next process starts without the original env.
+- If you want rotated values to take effect immediately, restart `git-ops` with
+  the new environment present so the snapshot is refreshed.
 - `file_forwarder` reads allowlisted host files and provides temp file paths to
   docker compose via environment variables.
 - `google_secret_manager` requires Google ADC credentials.

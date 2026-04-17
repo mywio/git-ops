@@ -5,11 +5,13 @@ Each plugin is a shared object (`.so`) file loaded at runtime.
 
 Per-plugin docs live with their source. Start here:
 
+- [Example Plugin](../../plugins/example/README.md)
 - [Reconciler](../../plugins/reconciler/README.md)
 - [Google Secret Manager](../../plugins/google_secret_manager/README.md)
 - [Env Forwarder](../../plugins/env_forwarder/README.md)
 - [File Forwarder](../../plugins/file_forwarder/README.md)
 - [MCP](../../plugins/mcp/README.md)
+- [Discord Notifier](../../plugins/notifier_discord/README.md)
 - [Pushover Notifier](../../plugins/notifier_pushover/README.md)
 - [Webhook Notifier](../../plugins/notifier_webhook/README.md)
 - [UI](../../plugins/ui/README.md)

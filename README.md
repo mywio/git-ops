@@ -30,7 +30,7 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 | :--- | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | PAT with `repo` scope | Yes | `ghp_123...` |
 | `GITHUB_USERS` | Comma-separated users/orgs to scan | Yes | `myuser,myorg` |
-| `TOPIC_FILTER` | The GitHub Topic to watch for | Yes | `homelab-server-1` |
+| `TOPIC_FILTER` | Comma-separated GitHub topics to watch for | Yes | `homelab-server-1,prod` |
 | `TARGET_DIR` | Local path to store stacks | No | `/opt/stacks` |
 | `GLOBAL_HOOKS_DIR`| Path to server-wide hooks | No | `/etc/git-ops/hooks` |
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
@@ -53,6 +53,7 @@ Available plugins:
 - **MCP**: AI Context integration (Model Context Protocol).
 - **UI**: Web Dashboard with deployment list, log streaming, and system info.
 - **Pushover Notifier**: Sends deployment alerts via Pushover.
+- **Discord Notifier**: Sends deployment alerts to a Discord webhook.
 - **Webhook Notifier**: Sends deployment events to a generic webhook endpoint.
 - **Webhook Trigger**: Exposes `POST /reconcile` to trigger an immediate reconciliation on demand.
 - **Audit**: Subscribes to all events and maintains a queryable audit log (memory or SQLite).
@@ -63,7 +64,7 @@ See [docs/plugins/](docs/plugins/) for more details.
 See `docs/deploy.md` for build and run instructions.
 
 ## How it Works
-1.  **Scan:** Periodically queries GitHub for repositories matching a specific User and Topic (e.g., `topic:homelab-node-1`).
+1.  **Scan:** Periodically queries GitHub for repositories matching the configured users and one or more topics (e.g., `topic:homelab-node-1` or `topic:prod`).
 2.  **Reconcile:**
     * **New/Updated:** Downloads `docker-compose.yml` and hook scripts, then runs `docker compose up -d`.
     * **Removed/Archived:** Detects if a repo no longer matches the criteria and runs `docker compose down` + deletes the local folder.

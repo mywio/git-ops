@@ -290,7 +290,7 @@ func (p *MCPPlugin) dispatchTool(_ context.Context, name string, args map[string
 
 	case "get_setup_info":
 		return textResult(map[string]string{
-			"instructions": "Add the topic matching TOPIC_FILTER to your GitHub repo and place docker-compose.yml at the root.",
+			"instructions": "Add one of the configured TOPIC_FILTER topics to your GitHub repo and place docker-compose.yml at the root.",
 			"hooks":        "Add optional hook scripts in .deploy/pre/ (run before compose up) and .deploy/post/ (run after).",
 			"removal":      "Add the 'git-ops-remove' topic or archive the repository to trigger teardown.",
 			"secrets":      "Secrets are injected at runtime by configured plugins (Google Secret Manager, env_forwarder, file_forwarder).",
