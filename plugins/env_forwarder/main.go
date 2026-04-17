@@ -2,21 +2,27 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mywio/git-ops/pkg/config"
 	"github.com/mywio/git-ops/pkg/core"
 )
 
 type EnvForwarderPlugin struct {
-	logger   *slog.Logger
-	keys     []string
-	prefixes []string
-	enabled  bool
+	logger    *slog.Logger
+	keys      []string
+	prefixes  []string
+	enabled   bool
+	env       map[string]string
+	statePath string
 
 	statsMu sync.RWMutex
 	stats   envForwarderStats
@@ -74,17 +80,31 @@ func (p *EnvForwarderPlugin) Init(ctx context.Context, logger *slog.Logger, regi
 			p.keys = normalizeList(ecfg.Keys)
 			p.prefixes = normalizeList(ecfg.Prefixes)
 		}
+		if coreSection, ok := cfg["core"]; ok {
+			coreCfg := config.LoadConfigFromMap(coreSection)
+			p.statePath = envForwarderStatePath(coreCfg.TargetDir)
+		}
+	}
+	if p.statePath == "" {
+		p.statePath = envForwarderStatePath("")
 	}
 
 	if len(p.keys) == 0 && len(p.prefixes) == 0 {
 		p.logger.WarnContext(ctx, "env_forwarder has no keys or prefixes configured, disabled")
 		p.enabled = false
+		p.env = map[string]string{}
 		p.setStats(envForwarderStats{
 			ConfiguredKeys:     len(p.keys),
 			ConfiguredPrefixes: len(p.prefixes),
 		})
 		return nil
 	}
+
+	snapshot, err := p.buildSnapshot()
+	if err != nil {
+		return err
+	}
+	p.env = snapshot
 
 	p.enabled = true
 	p.setStats(envForwarderStats{
@@ -159,36 +179,26 @@ func (p *EnvForwarderPlugin) collectSecrets(ctx context.Context) (map[string]str
 		return map[string]string{}, stats
 	}
 
-	secrets := make(map[string]string)
-	envMap := make(map[string]string)
-	for _, env := range os.Environ() {
-		parts := strings.SplitN(env, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		envMap[parts[0]] = parts[1]
-	}
+	secrets := cloneStringMap(p.env)
 
 	for _, prefix := range p.prefixes {
 		stats.PrefixMatches[prefix] = 0
 		stats.PrefixForwarded[prefix] = 0
+	}
+	configuredKeys := make(map[string]struct{}, len(p.keys))
+	for _, key := range p.keys {
+		if key != "" {
+			configuredKeys[key] = struct{}{}
+		}
 	}
 
 	for _, key := range p.keys {
 		if key == "" {
 			continue
 		}
-		value, ok := envMap[key]
+		value, ok := secrets[key]
 		if !ok {
 			p.logger.Warn("Env var not set", "key", key)
-			core.Publish(ctx, core.InternalEvent{
-				Type:   "notify_env_forwarder_missing",
-				Source: "env_forwarder",
-				String: fmt.Sprintf("Env var %s not set", key),
-				Details: map[string]interface{}{
-					"key": key,
-				},
-			})
 			stats.MissingKeys = append(stats.MissingKeys, key)
 			continue
 		}
@@ -197,15 +207,14 @@ func (p *EnvForwarderPlugin) collectSecrets(ctx context.Context) (map[string]str
 	}
 
 	if len(p.prefixes) > 0 {
-		for key, value := range envMap {
+		for key := range secrets {
 			for _, prefix := range p.prefixes {
 				if prefix == "" {
 					continue
 				}
 				if strings.HasPrefix(key, prefix) {
 					stats.PrefixMatches[prefix]++
-					if _, exists := secrets[key]; !exists {
-						secrets[key] = value
+					if _, exists := configuredKeys[key]; !exists {
 						stats.ForwardedFromPrefixes++
 						stats.PrefixForwarded[prefix]++
 					}
@@ -218,6 +227,55 @@ func (p *EnvForwarderPlugin) collectSecrets(ctx context.Context) (map[string]str
 	stats.ForwardedTotal = len(secrets)
 	stats.LastUpdated = time.Now().UTC()
 	return secrets, stats
+}
+
+func (p *EnvForwarderPlugin) buildSnapshot() (map[string]string, error) {
+	persisted, err := loadPersistedEnvForwarderSnapshot(p.statePath)
+	if err != nil {
+		return nil, err
+	}
+
+	live := p.collectLiveEnv()
+	snapshot := make(map[string]string, len(persisted)+len(live))
+	for key, value := range persisted {
+		snapshot[key] = value
+	}
+	for key, value := range live {
+		snapshot[key] = value
+	}
+
+	if err := persistEnvForwarderSnapshot(p.statePath, snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func (p *EnvForwarderPlugin) collectLiveEnv() map[string]string {
+	configuredKeys := make(map[string]struct{}, len(p.keys))
+	for _, key := range p.keys {
+		configuredKeys[key] = struct{}{}
+	}
+
+	out := make(map[string]string)
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		value := parts[1]
+		if _, ok := configuredKeys[key]; ok {
+			out[key] = value
+			continue
+		}
+		for _, prefix := range p.prefixes {
+			if prefix != "" && strings.HasPrefix(key, prefix) {
+				out[key] = value
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (p *EnvForwarderPlugin) setStats(stats envForwarderStats) {
@@ -256,6 +314,73 @@ func cloneStringIntMap(in map[string]int) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func envForwarderStatePath(targetDir string) string {
+	baseDir := strings.TrimSpace(targetDir)
+	if baseDir == "" {
+		baseDir = "."
+	}
+	return filepath.Join(baseDir, ".git-ops", "env_forwarder_snapshot.json")
+}
+
+func loadPersistedEnvForwarderSnapshot(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("read env_forwarder state: %w", err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return map[string]string{}, nil
+	}
+
+	var snapshot map[string]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode env_forwarder state: %w", err)
+	}
+	if snapshot == nil {
+		return map[string]string{}, nil
+	}
+	return snapshot, nil
+}
+
+func persistEnvForwarderSnapshot(path string, snapshot map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create env_forwarder state dir: %w", err)
+	}
+
+	keys := make([]string, 0, len(snapshot))
+	for key := range snapshot {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	ordered := make(map[string]string, len(snapshot))
+	for _, key := range keys {
+		ordered[key] = snapshot[key]
+	}
+
+	data, err := json.Marshal(ordered)
+	if err != nil {
+		return fmt.Errorf("encode env_forwarder state: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write env_forwarder state: %w", err)
+	}
+	return nil
 }
 
 func normalizeList(values []string) []string {

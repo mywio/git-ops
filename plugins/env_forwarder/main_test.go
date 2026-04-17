@@ -4,10 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mywio/git-ops/pkg/core"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEnvForwarderPlugin_AllowsKeysAndPrefixes(t *testing.T) {
@@ -75,4 +77,52 @@ func TestEnvForwarderPlugin_UnknownAction(t *testing.T) {
 
 	_, err = p.Execute(context.Background(), "nope", map[string]interface{}{})
 	assert.Error(t, err)
+}
+
+func TestEnvForwarderPlugin_PersistsSnapshotAcrossRestart(t *testing.T) {
+	stateDir := t.TempDir()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	buildManager := func() *core.ModuleManager {
+		mgr := core.NewModuleManager(logger)
+		mgr.SetConfig(map[string]map[string]any{
+			"core": {
+				"target_dir": stateDir,
+			},
+			"env_forwarder": {
+				"keys":     []string{"FOO"},
+				"prefixes": []string{"APP_"},
+			},
+		})
+		return mgr
+	}
+
+	t.Setenv("FOO", "bar")
+	t.Setenv("APP_TOKEN", "abc123")
+
+	first := &EnvForwarderPlugin{}
+	require.NoError(t, first.Init(context.Background(), logger, buildManager()))
+
+	firstRes, err := first.Execute(context.Background(), "get_secrets", map[string]interface{}{})
+	require.NoError(t, err)
+	firstSecrets := firstRes.(map[string]string)
+	assert.Equal(t, "bar", firstSecrets["FOO"])
+	assert.Equal(t, "abc123", firstSecrets["APP_TOKEN"])
+
+	require.NoError(t, os.Unsetenv("FOO"))
+	require.NoError(t, os.Unsetenv("APP_TOKEN"))
+
+	second := &EnvForwarderPlugin{}
+	require.NoError(t, second.Init(context.Background(), logger, buildManager()))
+
+	secondRes, err := second.Execute(context.Background(), "get_secrets", map[string]interface{}{})
+	require.NoError(t, err)
+	secondSecrets := secondRes.(map[string]string)
+	assert.Equal(t, "bar", secondSecrets["FOO"])
+	assert.Equal(t, "abc123", secondSecrets["APP_TOKEN"])
+
+	data, err := os.ReadFile(filepath.Join(stateDir, ".git-ops", "env_forwarder_snapshot.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "\"FOO\":\"bar\"")
+	assert.Contains(t, string(data), "\"APP_TOKEN\":\"abc123\"")
 }

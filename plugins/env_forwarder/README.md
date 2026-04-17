@@ -11,7 +11,10 @@ Keys:
 
 Behavior:
 - Only affects the `docker compose` process environment.
-- Missing keys are skipped with a warning and emit `notify_env_forwarder_missing`.
+- Snapshots allowlisted values to `TARGET_DIR/.git-ops/env_forwarder_snapshot.json`
+  so restarts can reuse the last known values when the new server process starts
+  without the original environment.
+- Missing keys are skipped with a warning.
 - If multiple secret plugins return the same key, the first plugin wins and a
   `notify_secret_conflict` event is emitted by the reconciler.
 
