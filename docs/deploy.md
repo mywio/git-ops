@@ -24,6 +24,7 @@ core:
   token: "ghp_123..."
   users: ["myuser", "myorg"]
   topic: ["homelab-server-1", "prod"]
+  plugins: ["reconciler", "ui", "discord"]
   target_dir: "/opt/stacks"
   interval: "5m"
   plugins_dir: "./bin/plugins"

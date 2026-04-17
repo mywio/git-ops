@@ -36,6 +36,7 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
 | `DRY_RUN` | Log only, no changes | No | `false` |
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
+| `PLUGINS_ALLOW` | Comma-separated plugin `.so` base names to load | No | `reconciler,ui,discord` |
 | `CORE_HTTP_ADDR` | Core HTTP bind address for APIs/UI | No | `127.0.0.1:8080` |
 | `SECRETS_DIR` | Path to local secrets directory | No | `/etc/git-ops/secrets` |
 

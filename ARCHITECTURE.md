@@ -52,6 +52,11 @@ Key types:
 are stored on the manager instance rather than in package globals, which keeps
 tests isolated and avoids cross-manager event leakage.
 
+Plugin loading can be filtered at runtime with `core.plugins` or the
+comma-separated `PLUGINS_ALLOW` environment variable. When the allowlist is
+empty, `ModuleManager.LoadPlugins` loads every `.so` in the configured plugins
+directory.
+
 ## Configuration Model
 
 Configuration is sectioned and plugin-oriented.

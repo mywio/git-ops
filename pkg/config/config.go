@@ -92,6 +92,7 @@ func LoadConfigMapFromEnv() ConfigMap {
 			"token":            os.Getenv("GITHUB_TOKEN"),
 			"users":            os.Getenv("GITHUB_USERS"),
 			"topic":            os.Getenv("TOPIC_FILTER"),
+			"plugins":          os.Getenv("PLUGINS_ALLOW"),
 			"target_dir":       os.Getenv("TARGET_DIR"),
 			"interval":         os.Getenv("SYNC_INTERVAL"),
 			"hook_timeout":     os.Getenv("HOOK_TIMEOUT"),
