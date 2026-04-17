@@ -10,7 +10,7 @@ import (
 	"github.com/mywio/git-ops/pkg/core"
 )
 
-//go:embed frontend/*
+//go:embed frontend/dist
 var frontendFS embed.FS
 
 type UIPlugin struct {

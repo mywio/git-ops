@@ -200,7 +200,7 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 		"user":    n.user,
 		"message": notification.Body,
 		"title":   notification.Title,
-		// TODO: Have a priority map in config. That will map notification types to priority levels.
+		// TODO: Add a config-driven priority map that maps notification/event types to Pushover priority levels.
 		//"priority": ,
 	}
 
@@ -275,7 +275,7 @@ func parseSubscribePatterns(section map[string]any) []string {
 	}
 }
 
-// TODO: fix me after the refactor
+// TODO: Restore or remove this standalone testing stub after the notifier refactor is complete.
 // Main for standalone testing
 //func main() {
 //	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

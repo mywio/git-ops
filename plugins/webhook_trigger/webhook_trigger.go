@@ -10,21 +10,29 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
 )
 
 type WebhookTriggerPlugin struct {
-	port   string
-	token  string
-	logger *slog.Logger
-	mux    *http.ServeMux
-	server *http.Server
+	port         string
+	token        string
+	rateLimit    time.Duration
+	logger       *slog.Logger
+	registry     core.PluginRegistry
+	mux          *http.ServeMux
+	server       *http.Server
+	now          func() time.Time
+	rateLimitMu  sync.Mutex
+	lastAccepted time.Time
 }
 
 type webhookTriggerConfig struct {
-	Port  string `yaml:"port"`
-	Token string `yaml:"token"`
+	Port      string `yaml:"port"`
+	Token     string `yaml:"token"`
+	RateLimit string `yaml:"rate_limit"`
 }
 
 func (p *WebhookTriggerPlugin) Name() string {
@@ -33,6 +41,10 @@ func (p *WebhookTriggerPlugin) Name() string {
 
 func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
+	p.registry = registry
+	if p.now == nil {
+		p.now = time.Now
+	}
 
 	if registry != nil {
 		cfg := registry.GetConfig()
@@ -43,6 +55,13 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 			}
 			p.port = wcfg.Port
 			p.token = wcfg.Token
+			if wcfg.RateLimit != "" {
+				rateLimit, err := time.ParseDuration(wcfg.RateLimit)
+				if err != nil {
+					return fmt.Errorf("parse webhook_trigger rate_limit: %w", err)
+				}
+				p.rateLimit = rateLimit
+			}
 		}
 	}
 	if p.port == "" {
@@ -123,57 +142,81 @@ func (p *WebhookTriggerPlugin) handleReconcile(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	if limited, retryAfter := p.checkRateLimit(); limited {
+		w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter.Seconds()))
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, `{"status":"rate_limited","message":"Reconciliation trigger rate-limited"}`)
+		return
+	}
+
 	p.logger.Info("Reconciliation trigger received via webhook",
 		"client_ip", r.RemoteAddr,
 		"user_agent", r.UserAgent())
 
-	core.Publish(r.Context(), core.InternalEvent{
-		Type:    "reconcile_now",
-		Source:  "webhook_trigger",
-		Details: map[string]interface{}{"client_ip": r.RemoteAddr},
-	})
+	if p.registry != nil {
+		p.registry.Publish(r.Context(), core.InternalEvent{
+			Type:    "reconcile_now",
+			Source:  "webhook_trigger",
+			Details: map[string]interface{}{"client_ip": r.RemoteAddr},
+		})
 
-	// Publish an event (useful for logging/auditing)
-	core.Publish(r.Context(), core.InternalEvent{
-		Type:   "webhook_received",
-		Source: "webhook_trigger",
-		Details: map[string]interface{}{
-			"client_ip":  r.RemoteAddr,
-			"method":     r.Method,
-			"user_agent": r.UserAgent(),
-		},
-	})
-
-	// Trigger reconciliation
-	select {
-	case core.TriggerReconcile <- struct{}{}:
-		p.logger.Info("Reconciliation triggered successfully via webhook")
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprintln(w, `{"status": "accepted", "message": "Reconciliation triggered"}`)
-	default:
-		// Channel is full → already triggering
-		p.logger.Debug("Reconciliation already in progress, webhook request accepted but ignored")
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprintln(w, `{"status": "accepted", "message": "Reconciliation already in progress"}`)
+		// Publish an event (useful for logging/auditing)
+		p.registry.Publish(r.Context(), core.InternalEvent{
+			Type:   "webhook_received",
+			Source: "webhook_trigger",
+			Details: map[string]interface{}{
+				"client_ip":  r.RemoteAddr,
+				"method":     r.Method,
+				"user_agent": r.UserAgent(),
+			},
+		})
 	}
+
+	p.logger.Info("Reconciliation triggered successfully via webhook")
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprintln(w, `{"status": "accepted", "message": "Reconciliation triggered"}`)
+}
+
+func (p *WebhookTriggerPlugin) checkRateLimit() (bool, time.Duration) {
+	if p.rateLimit <= 0 {
+		return false, 0
+	}
+
+	p.rateLimitMu.Lock()
+	defer p.rateLimitMu.Unlock()
+
+	now := p.now().UTC()
+	if !p.lastAccepted.IsZero() {
+		nextAllowed := p.lastAccepted.Add(p.rateLimit)
+		if now.Before(nextAllowed) {
+			return true, nextAllowed.Sub(now)
+		}
+	}
+
+	p.lastAccepted = now
+	return false, 0
 }
 
 // Exported symbol that core looks up
 var Plugin core.Plugin = &WebhookTriggerPlugin{}
 
 type webhookTriggerConfigView struct {
-	Port     string      `json:"port"`
-	Token    core.Secret `json:"token"`
-	Secured  bool        `json:"secured"`
-	Enabled  bool        `json:"enabled"`
+	Port      string      `json:"port"`
+	Token     core.Secret `json:"token"`
+	Secured   bool        `json:"secured"`
+	Enabled   bool        `json:"enabled"`
+	RateLimit string      `json:"rate_limit"`
+	Throttled bool        `json:"throttled"`
 }
 
 func (p *WebhookTriggerPlugin) Config() any {
 	return webhookTriggerConfigView{
-		Port:    p.port,
-		Token:   core.NewSecret(p.token),
-		Secured: p.token != "",
-		Enabled: p.port != "",
+		Port:      p.port,
+		Token:     core.NewSecret(p.token),
+		Secured:   p.token != "",
+		Enabled:   p.port != "",
+		RateLimit: p.rateLimit.String(),
+		Throttled: p.rateLimit > 0,
 	}
 }
 

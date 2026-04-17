@@ -10,6 +10,11 @@
   --border-color: #334155;
   --status-running: #10b981;
   --status-unknown: #f59e0b;
+  --status-stopped: #f97316;
+  --status-failed: #ef4444;
+  --status-requested: #38bdf8;
+  --status-succeeded: #22c55e;
+  --status-partial: #facc15;
   --font-base: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
@@ -239,9 +244,60 @@ body {
   color: var(--status-unknown);
 }
 
+.status-badge.partial {
+  background-color: rgba(250, 204, 21, 0.15);
+  color: var(--status-partial);
+}
+
+.status-badge.stopped,
+.status-badge.failed {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: var(--status-failed);
+}
+
+.status-badge.requested {
+  background-color: rgba(56, 189, 248, 0.15);
+  color: var(--status-requested);
+}
+
+.status-badge.succeeded {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: var(--status-succeeded);
+}
+
 .status-badge.healthy {
   background-color: rgba(59, 130, 246, 0.15);
   color: var(--accent-color);
+}
+
+.execution-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.status-detail {
+  font-size: 0.75rem;
+}
+
+.stage-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background-color: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.error-cell {
+  max-width: 260px;
+  color: #fca5a5;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* --- Logs Viewer --- */

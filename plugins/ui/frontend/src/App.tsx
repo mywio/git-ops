@@ -15,6 +15,18 @@ type Deployment = {
     repo: string;
     path: string;
     status: string;
+    execution_status?: string;
+    execution_stage?: string;
+    last_error?: string;
+    history?: ExecutionHistoryEntry[];
+};
+
+type ExecutionHistoryEntry = {
+    ExecutionID: string;
+    Status: string;
+    Stage: string;
+    LastError: string;
+    UpdatedAt: string;
 };
 
 type PluginInfo = {
@@ -24,6 +36,25 @@ type PluginInfo = {
     capabilities: string[];
     config?: any;
 };
+
+function formatExecutionHistory(history?: ExecutionHistoryEntry[]) {
+    if (!history || history.length === 0) {
+        return '';
+    }
+
+    return history
+        .map((entry) => {
+            const details = [`${entry.Status} @ ${entry.Stage}`];
+            if (entry.UpdatedAt) {
+                details.push(new Date(entry.UpdatedAt).toLocaleString());
+            }
+            if (entry.LastError) {
+                details.push(`error: ${entry.LastError}`);
+            }
+            return details.join(' | ');
+        })
+        .join('\n');
+}
 
 /* --- App Component --- */
 function App() {
@@ -163,9 +194,12 @@ function App() {
                                 <table className="stacks-table">
                                     <thead>
                                         <tr>
-                                            <th>Status</th>
+                                            <th>Runtime</th>
+                                            <th>Execution</th>
+                                            <th>Stage</th>
                                             <th>Owner</th>
                                             <th>Repository</th>
+                                            <th>Last Error</th>
                                             <th>Path</th>
                                         </tr>
                                     </thead>
@@ -178,8 +212,34 @@ function App() {
                                                         {dep.status}
                                                     </span>
                                                 </td>
+                                                <td title={formatExecutionHistory(dep.history)}>
+                                                    {dep.execution_status ? (
+                                                        <div className="execution-cell">
+                                                            <span className={`status-badge ${dep.execution_status}`}>
+                                                                {dep.execution_status}
+                                                            </span>
+                                                            {dep.history && dep.history.length > 0 ? (
+                                                                <div className="status-detail text-muted">
+                                                                    {dep.history.length} recent runs
+                                                                </div>
+                                                            ) : null}
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-muted">n/a</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    {dep.execution_stage ? (
+                                                        <span className="stage-pill">{dep.execution_stage}</span>
+                                                    ) : (
+                                                        <span className="text-muted">n/a</span>
+                                                    )}
+                                                </td>
                                                 <td>{dep.owner}</td>
                                                 <td><strong>{dep.repo}</strong></td>
+                                                <td className="error-cell">
+                                                    {dep.last_error ? dep.last_error : <span className="text-muted">none</span>}
+                                                </td>
                                                 <td className="text-muted">{dep.path}</td>
                                             </tr>
                                         ))}

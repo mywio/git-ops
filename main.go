@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,8 +16,17 @@ import (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(core.Version)
+		return
+	}
+
 	// Setup Logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger.Info("git-ops starting", "version", core.Version)
 
 	// Load Config
 	cfgMapEnv := config.LoadConfigMapFromEnv()
