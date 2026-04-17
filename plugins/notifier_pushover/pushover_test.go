@@ -71,7 +71,7 @@ func TestParseSubscribePatternsPushover(t *testing.T) {
 func TestPushoverSendBuildsTitleAndMessageFromNormalizedPayload(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
@@ -116,7 +116,7 @@ func TestPushoverSendBuildsTitleAndMessageFromNormalizedPayload(t *testing.T) {
 func TestPushoverSendKeepsGenericEventContext(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)

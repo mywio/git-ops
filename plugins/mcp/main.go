@@ -384,13 +384,17 @@ func (p *MCPPlugin) getDeploymentInfo(repo string) (deploymentInfo, bool) {
 // Helpers
 func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Default().Error("failed to encode JSON response", "error", err)
+	}
 }
 
 func jsonError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	if encodeErr := json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); encodeErr != nil {
+		slog.Default().Error("failed to encode JSON error response", "error", encodeErr)
+	}
 }
 
 // parseStackServicePath expects exactly {owner}/{repo}/{service} after prefix.
@@ -497,7 +501,13 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	p := &MCPPlugin{}
 	ctx := context.Background()
-	p.Init(ctx, logger, nil) // nil registry for testing
-	p.Start(ctx)
+	if err := p.Init(ctx, logger, nil); err != nil { // nil registry for testing
+		logger.Error("Init failed", "error", err)
+		return
+	}
+	if err := p.Start(ctx); err != nil {
+		logger.Error("Start failed", "error", err)
+		return
+	}
 	select {} // Block for testing
 }

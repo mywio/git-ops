@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -147,13 +148,18 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		case line, ok := <-logChan:
 			if !ok {
 				// channel closed
-				fmt.Fprintf(w, "event: close\ndata: \n\n")
+				if _, err := fmt.Fprintf(w, "event: close\ndata: \n\n"); err != nil {
+					slog.Default().Debug("failed to write SSE close event", "error", err)
+				}
 				flusher.Flush()
 				return
 			}
 			// Escape newlines for SSE format
 			safeLine := strings.ReplaceAll(line, "\n", "\\n")
-			fmt.Fprintf(w, "data: %s\n\n", safeLine)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", safeLine); err != nil {
+				slog.Default().Debug("failed to write SSE log event", "error", err)
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -163,6 +169,8 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if data != nil {
-		json.NewEncoder(w).Encode(data)
+		if err := json.NewEncoder(w).Encode(data); err != nil {
+			slog.Default().Error("failed to encode UI JSON response", "error", err)
+		}
 	}
 }

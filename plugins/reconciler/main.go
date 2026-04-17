@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -219,109 +220,113 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 
 	// Register Events
 	if registry != nil {
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "reconcile_now",
-			Description: "Request an immediate full reconciliation",
-			PayloadSpec: map[string]core.PayloadField{
-				"force": {Type: "bool", Description: "Force even if locked", Required: false},
+		eventTypes := []core.EventTypeDesc{
+			{
+				Name:        "reconcile_now",
+				Description: "Request an immediate full reconciliation",
+				PayloadSpec: map[string]core.PayloadField{
+					"force": {Type: "bool", Description: "Force even if locked", Required: false},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "reconcile_stack",
-			Description: "Request reconciliation for a specific stack",
-			PayloadSpec: map[string]core.PayloadField{
-				"owner":      {Type: "string", Description: "Repository owner", Required: true},
-				"repo":       {Type: "string", Description: "Repository name", Required: true},
-				"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
+			{
+				Name:        "reconcile_stack",
+				Description: "Request reconciliation for a specific stack",
+				PayloadSpec: map[string]core.PayloadField{
+					"owner":      {Type: "string", Description: "Repository owner", Required: true},
+					"repo":       {Type: "string", Description: "Repository name", Required: true},
+					"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "deploy_success",
-			Description: "Stack deployed successfully",
-			PayloadSpec: map[string]core.PayloadField{
-				"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
+			{
+				Name:        "deploy_success",
+				Description: "Stack deployed successfully",
+				PayloadSpec: map[string]core.PayloadField{
+					"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "deploy_failed",
-			Description: "Stack deployment failed",
-			PayloadSpec: map[string]core.PayloadField{
-				"error": {Type: "string", Description: "Error message", Required: true},
+			{
+				Name:        "deploy_failed",
+				Description: "Stack deployment failed",
+				PayloadSpec: map[string]core.PayloadField{
+					"error": {Type: "string", Description: "Error message", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "deploy_start",
-			Description: "Stack deployment starting",
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        core.EventTypeExecution,
-			Description: "Stack execution lifecycle update",
-			PayloadSpec: map[string]core.PayloadField{
-				"execution_id": {Type: "string", Description: "Execution identifier", Required: true},
-				"owner":        {Type: "string", Description: "Repository owner", Required: true},
-				"repo":         {Type: "string", Description: "Repository name", Required: true},
-				"full_name":    {Type: "string", Description: "Repository full name", Required: true},
-				"stage":        {Type: "string", Description: "Current execution stage", Required: true},
-				"status":       {Type: "string", Description: "Current execution status", Required: true},
+			{Name: "deploy_start", Description: "Stack deployment starting"},
+			{
+				Name:        core.EventTypeExecution,
+				Description: "Stack execution lifecycle update",
+				PayloadSpec: map[string]core.PayloadField{
+					"execution_id": {Type: "string", Description: "Execution identifier", Required: true},
+					"owner":        {Type: "string", Description: "Repository owner", Required: true},
+					"repo":         {Type: "string", Description: "Repository name", Required: true},
+					"full_name":    {Type: "string", Description: "Repository full name", Required: true},
+					"stage":        {Type: "string", Description: "Current execution stage", Required: true},
+					"status":       {Type: "string", Description: "Current execution status", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "stack_commit_changed",
-			Description: "Stack commit advanced after successful reconciliation",
-			PayloadSpec: map[string]core.PayloadField{
-				"owner":           {Type: "string", Description: "Repository owner", Required: true},
-				"repo":            {Type: "string", Description: "Repository name", Required: true},
-				"full_name":       {Type: "string", Description: "Repository full name", Required: true},
-				"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
-				"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
-				"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
-				"compose_changed": {Type: "bool", Description: "Whether compose changed in the successful reconcile path", Required: true},
+			{
+				Name:        "stack_commit_changed",
+				Description: "Stack commit advanced after successful reconciliation",
+				PayloadSpec: map[string]core.PayloadField{
+					"owner":           {Type: "string", Description: "Repository owner", Required: true},
+					"repo":            {Type: "string", Description: "Repository name", Required: true},
+					"full_name":       {Type: "string", Description: "Repository full name", Required: true},
+					"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
+					"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
+					"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
+					"compose_changed": {Type: "bool", Description: "Whether compose changed in the successful reconcile path", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "notify_secret_conflict",
-			Description: "Duplicate secret detected during deployment",
-			PayloadSpec: map[string]core.PayloadField{
-				"key":     {Type: "string", Description: "Secret key", Required: true},
-				"winner":  {Type: "string", Description: "Plugin that provided it", Required: true},
-				"skipped": {Type: "string", Description: "Plugin that was skipped", Required: true},
+			{
+				Name:        "notify_secret_conflict",
+				Description: "Duplicate secret detected during deployment",
+				PayloadSpec: map[string]core.PayloadField{
+					"key":     {Type: "string", Description: "Secret key", Required: true},
+					"winner":  {Type: "string", Description: "Plugin that provided it", Required: true},
+					"skipped": {Type: "string", Description: "Plugin that was skipped", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "notify_compose_env_persistence_risk",
-			Description: "Forwarded compose env is referenced outside the service runtime environment",
-			PayloadSpec: map[string]core.PayloadField{
-				"owner":      {Type: "string", Description: "Repository owner", Required: true},
-				"repo":       {Type: "string", Description: "Repository name", Required: true},
-				"full_name":  {Type: "string", Description: "Repository full name", Required: true},
-				"services":   {Type: "array", Description: "Affected compose service names", Required: true},
-				"keys":       {Type: "array", Description: "Forwarded env keys involved in risky references", Required: true},
-				"risk_count": {Type: "int", Description: "Number of grouped risk findings", Required: true},
-				"findings":   {Type: "array", Description: "Per-service risk details", Required: true},
+			{
+				Name:        "notify_compose_env_persistence_risk",
+				Description: "Forwarded compose env is referenced outside the service runtime environment",
+				PayloadSpec: map[string]core.PayloadField{
+					"owner":      {Type: "string", Description: "Repository owner", Required: true},
+					"repo":       {Type: "string", Description: "Repository name", Required: true},
+					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"services":   {Type: "array", Description: "Affected compose service names", Required: true},
+					"keys":       {Type: "array", Description: "Forwarded env keys involved in risky references", Required: true},
+					"risk_count": {Type: "int", Description: "Number of grouped risk findings", Required: true},
+					"findings":   {Type: "array", Description: "Per-service risk details", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "stack_locked",
-			Description: "Stack deployment or prune was skipped because a lock file is present",
-			PayloadSpec: map[string]core.PayloadField{
-				"owner":      {Type: "string", Description: "Repository owner", Required: true},
-				"repo":       {Type: "string", Description: "Repository name", Required: true},
-				"full_name":  {Type: "string", Description: "Repository full name", Required: true},
-				"stack_path": {Type: "string", Description: "Absolute stack path", Required: true},
-				"lock_file":  {Type: "string", Description: "Absolute lock file path", Required: true},
+			{
+				Name:        "stack_locked",
+				Description: "Stack deployment or prune was skipped because a lock file is present",
+				PayloadSpec: map[string]core.PayloadField{
+					"owner":      {Type: "string", Description: "Repository owner", Required: true},
+					"repo":       {Type: "string", Description: "Repository name", Required: true},
+					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"stack_path": {Type: "string", Description: "Absolute stack path", Required: true},
+					"lock_file":  {Type: "string", Description: "Absolute lock file path", Required: true},
+				},
 			},
-		})
-		registry.RegisterEventType(core.EventTypeDesc{
-			Name:        "stack_health",
-			Description: "Stack health changed based on docker compose ps state",
-			PayloadSpec: map[string]core.PayloadField{
-				"owner":      {Type: "string", Description: "Repository owner", Required: true},
-				"repo":       {Type: "string", Description: "Repository name", Required: true},
-				"full_name":  {Type: "string", Description: "Repository full name", Required: true},
-				"status":     {Type: "string", Description: "Derived stack status", Required: true},
-				"containers": {Type: "array", Description: "Per-container health state", Required: true},
+			{
+				Name:        "stack_health",
+				Description: "Stack health changed based on docker compose ps state",
+				PayloadSpec: map[string]core.PayloadField{
+					"owner":      {Type: "string", Description: "Repository owner", Required: true},
+					"repo":       {Type: "string", Description: "Repository name", Required: true},
+					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"status":     {Type: "string", Description: "Derived stack status", Required: true},
+					"containers": {Type: "array", Description: "Per-container health state", Required: true},
+				},
 			},
-		})
+		}
+		for _, desc := range eventTypes {
+			if err := registry.RegisterEventType(desc); err != nil {
+				return fmt.Errorf("register event type %q: %w", desc.Name, err)
+			}
+		}
 
 		registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
 		registry.Subscribe("reconcile_stack", r.handleReconcileStackEvent)
@@ -976,7 +981,11 @@ func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) 
 
 	go func() {
 		defer close(logChan)
-		defer cmd.Wait()
+		defer func() {
+			if err := cmd.Wait(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				r.logger.Debug("docker compose logs process exited with error", "path", repoPath, "error", err)
+			}
+		}()
 
 		// Read output into channel
 		// Using a simple bufio.Scanner
@@ -1379,8 +1388,13 @@ func (r *Reconciler) applyForceTypePreDeploy(ctx context.Context, fullName strin
 	if forceType == "clean_local_state" {
 		logger.Info("Cleaning local state before deploy", "force_type", forceType)
 		if !r.cfg.DryRun {
-			os.Remove(spec.filePath)
-			os.RemoveAll(filepath.Join(spec.repoLocalPath, ".deploy"))
+			if err := os.Remove(spec.filePath); err != nil && !os.IsNotExist(err) {
+				logger.Debug("failed to remove local compose file", "path", spec.filePath, "error", err)
+			}
+			deployPath := filepath.Join(spec.repoLocalPath, ".deploy")
+			if err := os.RemoveAll(deployPath); err != nil {
+				logger.Debug("failed to remove local deploy state", "path", deployPath, "error", err)
+			}
 		}
 		return true
 	}
