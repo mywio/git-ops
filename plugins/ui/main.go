@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"io/fs"
 	"log/slog"
 	"net/http"
 
@@ -35,24 +34,8 @@ func (p *UIPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.
 	if registry != nil {
 		p.mux = registry.GetMuxServer()
 		p.registerRoutes()
-		p.registerFrontend()
 	}
 	return nil
-}
-
-func (p *UIPlugin) registerFrontend() {
-	if p.mux == nil {
-		return
-	}
-
-	dist, err := fs.Sub(frontendFS, "frontend/dist")
-	if err != nil {
-		p.logger.Error("Failed to load frontend/dist from embedded FS", "error", err)
-		return
-	}
-
-	fsHandler := http.FileServer(http.FS(dist))
-	p.mux.Handle("/", fsHandler)
 }
 
 func (p *UIPlugin) Start(ctx context.Context) error {

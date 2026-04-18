@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/mywio/git-ops/pkg/core"
@@ -19,8 +21,9 @@ func (p *UIPlugin) registerRoutes() {
 	p.mux.HandleFunc("/api/ui/deployments", p.handleDeployments)
 	p.mux.HandleFunc("/api/ui/logs", p.handleLogs)
 	p.mux.HandleFunc("/api/ui/system/info", p.handleSystemInfo)
-
-	// In the future this is where we will mount the Vite static SPA on "/"
+	p.mux.HandleFunc("/", p.handleRootRedirect)
+	p.mux.HandleFunc("/ui", p.handleUIRootRedirect)
+	p.mux.HandleFunc("/ui/", p.handleFrontend)
 }
 
 func (p *UIPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
@@ -174,5 +177,58 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 		if err := json.NewEncoder(w).Encode(data); err != nil {
 			slog.Default().Error("failed to encode UI JSON response", "error", err)
 		}
+	}
+}
+
+func (p *UIPlugin) handleRootRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/ui/system", http.StatusTemporaryRedirect)
+}
+
+func (p *UIPlugin) handleUIRootRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/ui" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/ui/system", http.StatusTemporaryRedirect)
+}
+
+func (p *UIPlugin) handleFrontend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	dist, err := fs.Sub(frontendFS, "frontend/dist")
+	if err != nil {
+		p.logger.Error("Failed to load frontend/dist from embedded FS", "error", err)
+		http.Error(w, "UI assets unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	requested := strings.TrimPrefix(path.Clean(r.URL.Path), "/ui/")
+	if requested == "." || requested == "/" {
+		requested = ""
+	}
+	if requested != "" {
+		if stat, err := fs.Stat(dist, requested); err == nil && !stat.IsDir() {
+			http.StripPrefix("/ui/", http.FileServer(http.FS(dist))).ServeHTTP(w, r)
+			return
+		}
+	}
+
+	index, err := fs.ReadFile(dist, "index.html")
+	if err != nil {
+		p.logger.Error("Failed to read embedded UI index", "error", err)
+		http.Error(w, "UI assets unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(index); err != nil {
+		p.logger.Debug("failed to write UI index response", "error", err)
 	}
 }

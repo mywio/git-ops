@@ -17,8 +17,17 @@ type pluginInfo struct {
 }
 
 func (m *ModuleManager) registerCoreRoutes() {
+	m.mux.HandleFunc("/health", m.handleHealth)
 	m.mux.HandleFunc("/api/plugins", m.handlePlugins)
 	m.mux.HandleFunc("/api/plugins/", m.handlePlugin)
+}
+
+func (m *ModuleManager) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (m *ModuleManager) handlePlugins(w http.ResponseWriter, r *http.Request) {

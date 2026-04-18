@@ -45,6 +45,25 @@ type PluginInfo = {
     config?: any;
 };
 
+const tabPaths: Record<string, string> = {
+    system: '/ui/system',
+    stacks: '/ui/stacks',
+    logs: '/ui/logs',
+    plugins: '/ui/plugins',
+};
+
+function tabFromPath(pathname: string) {
+    if (!pathname.startsWith('/ui/')) {
+        return 'system';
+    }
+
+    const segment = pathname.slice('/ui/'.length).split('/')[0];
+    if (segment in tabPaths) {
+        return segment;
+    }
+    return 'system';
+}
+
 function formatExecutionHistory(history?: ExecutionHistoryEntry[]) {
     if (!history || history.length === 0) {
         return '';
@@ -79,7 +98,7 @@ function deploymentLabel(dep: Deployment) {
 
 /* --- App Component --- */
 function App() {
-    const [activeTab, setActiveTab] = useState('system');
+    const [activeTab, setActiveTab] = useState(() => tabFromPath(window.location.pathname));
     const [systemInfo, setSystemInfo] = useState<any>(null);
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [plugins, setPlugins] = useState<PluginInfo[]>([]);
@@ -94,6 +113,15 @@ function App() {
     useEffect(() => {
         fetchData();
     }, [activeTab]);
+
+    useEffect(() => {
+        const handlePopState = () => {
+            setActiveTab(tabFromPath(window.location.pathname));
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
 
     const fetchData = async () => {
         setLoading(true);
@@ -170,6 +198,14 @@ function App() {
         { id: 'plugins', label: 'Plugin Config', icon: <Settings size={18} /> },
     ];
 
+    const handleTabClick = (tabId: string) => {
+        setActiveTab(tabId);
+        const nextPath = tabPaths[tabId] || '/ui/system';
+        if (window.location.pathname !== nextPath) {
+            window.history.pushState({}, '', nextPath);
+        }
+    };
+
     return (
         <div className="app-container">
             {/* Sidebar */}
@@ -183,7 +219,7 @@ function App() {
                         <button
                             key={item.id}
                             className={`nav-btn ${activeTab === item.id ? 'active' : ''}`}
-                            onClick={() => setActiveTab(item.id)}
+                            onClick={() => handleTabClick(item.id)}
                         >
                             {item.icon}
                             <span>{item.label}</span>

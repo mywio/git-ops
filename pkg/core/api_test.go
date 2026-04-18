@@ -93,3 +93,19 @@ func TestPluginsAPIDetail(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "REDACTED", cfg["token"])
 }
+
+func TestHealthAPI(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := NewModuleManager(logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+	mgr.handleHealth(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var out map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&out)
+	assert.NoError(t, err)
+	assert.Equal(t, "ok", out["status"])
+}

@@ -8,6 +8,7 @@ info:
     This spec covers:
     - core plugin metadata endpoints
     - UI helper endpoints
+    - health-check endpoints
     - webhook-trigger reconciliation endpoint
 
     It does not document internal plugin Execute actions because those are not
@@ -16,6 +17,30 @@ servers:
   - url: http://localhost:8080
     description: Example local server
 paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns a simple unauthenticated health signal for upstream probes.
+      responses:
+        "200":
+          description: Service is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                required:
+                  - status
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/plugins:
     get:
       summary: List loaded plugins
@@ -125,20 +150,29 @@ paths:
     get:
       summary: Stream stack logs
       description: |
-        Streams logs for a selected stack. Most successful responses use
+        Streams logs for either a managed stack or an unmanaged container.
+        Most successful responses use
         `text/event-stream`, but some plugins may fall back to a JSON payload
         containing a static `logs` string if streaming is unavailable.
       parameters:
         - in: query
           name: owner
-          required: true
+          required: false
           schema:
             type: string
+          description: Owner of the managed stack. Requires `repo` when used.
         - in: query
           name: repo
-          required: true
+          required: false
           schema:
             type: string
+          description: Repository of the managed stack. Requires `owner` when used.
+        - in: query
+          name: container
+          required: false
+          schema:
+            type: string
+          description: Name of an unmanaged Docker container to stream logs from.
         - in: query
           name: lines
           required: false
@@ -318,6 +352,14 @@ components:
         message:
           type: string
           example: Reconciliation triggered
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
       required:
         - status
         - message
