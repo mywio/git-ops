@@ -44,6 +44,18 @@ type Reconciler struct {
 	stopping       bool
 }
 
+type reconcilerConfigView struct {
+	Token          core.Secret   `json:"Token"`
+	Users          []string      `json:"Users"`
+	Topics         []string      `json:"Topics"`
+	TargetDir      string        `json:"TargetDir"`
+	Interval       time.Duration `json:"Interval"`
+	HookTimeout    time.Duration `json:"HookTimeout"`
+	GlobalHooksDir string        `json:"GlobalHooksDir"`
+	DryRun         bool          `json:"DryRun"`
+	SecretsDir     string        `json:"SecretsDir"`
+}
+
 type composePSContainer struct {
 	Name    string `json:"Name"`
 	Service string `json:"Service"`
@@ -176,7 +188,17 @@ func (r *Reconciler) Execute(ctx context.Context, action string, params map[stri
 }
 
 func (r *Reconciler) Config() any {
-	return r.cfg
+	return reconcilerConfigView{
+		Token:          core.NewSecret(r.cfg.Token),
+		Users:          append([]string(nil), r.cfg.Users...),
+		Topics:         append([]string(nil), r.cfg.Topics...),
+		TargetDir:      r.cfg.TargetDir,
+		Interval:       r.cfg.Interval,
+		HookTimeout:    r.cfg.HookTimeout,
+		GlobalHooksDir: r.cfg.GlobalHooksDir,
+		DryRun:         r.cfg.DryRun,
+		SecretsDir:     r.cfg.SecretsDir,
+	}
 }
 
 func (r *Reconciler) handleReconcileNowEvent(ctx context.Context, event core.InternalEvent) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -102,6 +103,33 @@ func TestReconcilerInitReturnsComposeAvailabilityError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, "docker compose not available: exec: \"docker\": executable file not found in $PATH", err.Error())
+}
+
+func TestReconcilerConfigRedactsToken(t *testing.T) {
+	reconciler := &Reconciler{
+		cfg: config.Config{
+			Token:          "ghp_secret",
+			Users:          []string{"acme"},
+			Topics:         []string{"deploy"},
+			TargetDir:      "/stacks",
+			Interval:       5 * time.Minute,
+			HookTimeout:    2 * time.Minute,
+			GlobalHooksDir: "/hooks",
+			DryRun:         true,
+			SecretsDir:     "/secrets",
+		},
+	}
+
+	data, err := json.Marshal(reconciler.Config())
+	require.NoError(t, err)
+
+	var out map[string]any
+	err = json.Unmarshal(data, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, "REDACTED", out["Token"])
+	assert.Equal(t, "/stacks", out["TargetDir"])
+	assert.Equal(t, true, out["DryRun"])
 }
 
 func TestDetectComposeChangeLogsFullAdditionForDryRunFirstDeploy(t *testing.T) {
