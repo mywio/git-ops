@@ -77,6 +77,14 @@ type composeSpec struct {
 	filePath         string
 }
 
+type deployRunContext struct {
+	fullName    string
+	repo        *github.Repository
+	spec        composeSpec
+	logger      *slog.Logger
+	deployStart time.Time
+}
+
 type stackHealthContainer struct {
 	Name  string
 	State string
@@ -236,6 +244,30 @@ func (r *Reconciler) handleReconcileStackEvent(ctx context.Context, event core.I
 func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	r.logger = logger
 	r.registry = registry
+	r.initializeState(registry)
+	r.loadConfigFromRegistry(registry)
+
+	if err := r.validateConfig(); err != nil {
+		return err
+	}
+
+	if err := r.registerEvents(registry); err != nil {
+		return err
+	}
+
+	r.client = newGitHubClient(ctx, r.cfg.Token)
+
+	if r.cfg.TargetDir == "" {
+		r.cfg.TargetDir = "./stacks"
+	}
+	if err := checkDockerComposeAvailable(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Reconciler) initializeState(registry core.PluginRegistry) {
 	if r.publishEvent == nil && registry != nil {
 		r.publishEvent = registry.Publish
 	}
@@ -255,151 +287,152 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 		r.healthStopCh = make(chan struct{})
 	}
 	if r.nodeID == "" {
-		hostName, err := os.Hostname()
-		if err != nil || strings.TrimSpace(hostName) == "" {
-			r.nodeID = "unknown"
-		} else {
-			r.nodeID = hostName
+		r.nodeID = detectNodeID()
+	}
+}
+
+func detectNodeID() string {
+	hostName, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostName) == "" {
+		return "unknown"
+	}
+	return hostName
+}
+
+func (r *Reconciler) loadConfigFromRegistry(registry core.PluginRegistry) {
+	if registry == nil {
+		return
+	}
+	cfgMap := registry.GetConfig()
+	if coreSection, ok := cfgMap["core"]; ok {
+		r.cfg = config.LoadConfigFromMap(coreSection)
+	}
+}
+
+func (r *Reconciler) registerEvents(registry core.PluginRegistry) error {
+	if registry == nil {
+		return nil
+	}
+
+	for _, desc := range reconcilerEventTypes() {
+		if err := registry.RegisterEventType(desc); err != nil {
+			return fmt.Errorf("register event type %q: %w", desc.Name, err)
 		}
 	}
 
-	if registry != nil {
-		cfgMap := registry.GetConfig()
-		if coreSection, ok := cfgMap["core"]; ok {
-			r.cfg = config.LoadConfigFromMap(coreSection)
-		}
-	}
-
-	if err := r.validateConfig(); err != nil {
-		return err
-	}
-
-	// Register Events
-	if registry != nil {
-		eventTypes := []core.EventTypeDesc{
-			{
-				Name:        "reconcile_now",
-				Description: "Request an immediate full reconciliation",
-				PayloadSpec: map[string]core.PayloadField{
-					"force": {Type: "bool", Description: "Force even if locked", Required: false},
-				},
-			},
-			{
-				Name:        "reconcile_stack",
-				Description: "Request reconciliation for a specific stack",
-				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
-					"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
-				},
-			},
-			{
-				Name:        "deploy_success",
-				Description: "Stack deployed successfully",
-				PayloadSpec: map[string]core.PayloadField{
-					"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
-				},
-			},
-			{
-				Name:        "deploy_failed",
-				Description: "Stack deployment failed",
-				PayloadSpec: map[string]core.PayloadField{
-					"error": {Type: "string", Description: "Error message", Required: true},
-				},
-			},
-			{Name: "deploy_start", Description: "Stack deployment starting"},
-			{
-				Name:        core.EventTypeExecution,
-				Description: "Stack execution lifecycle update",
-				PayloadSpec: map[string]core.PayloadField{
-					"execution_id": {Type: "string", Description: "Execution identifier", Required: true},
-					"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":         {Type: "string", Description: repoNameDescription, Required: true},
-					"full_name":    {Type: "string", Description: repoFullNameDescription, Required: true},
-					"stage":        {Type: "string", Description: "Current execution stage", Required: true},
-					"status":       {Type: "string", Description: "Current execution status", Required: true},
-				},
-			},
-			{
-				Name:        "stack_commit_changed",
-				Description: "Stack commit advanced after successful reconciliation",
-				PayloadSpec: map[string]core.PayloadField{
-					"owner":           {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":            {Type: "string", Description: repoNameDescription, Required: true},
-					"full_name":       {Type: "string", Description: repoFullNameDescription, Required: true},
-					"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
-					"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
-					"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
-					"compose_changed": {Type: "bool", Description: "Whether compose changed in the successful reconcile path", Required: true},
-				},
-			},
-			{
-				Name:        "notify_secret_conflict",
-				Description: "Duplicate secret detected during deployment",
-				PayloadSpec: map[string]core.PayloadField{
-					"key":     {Type: "string", Description: "Secret key", Required: true},
-					"winner":  {Type: "string", Description: "Plugin that provided it", Required: true},
-					"skipped": {Type: "string", Description: "Plugin that was skipped", Required: true},
-				},
-			},
-			{
-				Name:        "notify_compose_env_persistence_risk",
-				Description: "Forwarded compose env is referenced outside the service runtime environment",
-				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
-					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
-					"services":   {Type: "array", Description: "Affected compose service names", Required: true},
-					"keys":       {Type: "array", Description: "Forwarded env keys involved in risky references", Required: true},
-					"risk_count": {Type: "int", Description: "Number of grouped risk findings", Required: true},
-					"findings":   {Type: "array", Description: "Per-service risk details", Required: true},
-				},
-			},
-			{
-				Name:        "stack_locked",
-				Description: "Stack deployment or prune was skipped because a lock file is present",
-				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
-					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
-					"stack_path": {Type: "string", Description: "Absolute stack path", Required: true},
-					"lock_file":  {Type: "string", Description: "Absolute lock file path", Required: true},
-				},
-			},
-			{
-				Name:        "stack_health",
-				Description: "Stack health changed based on docker compose ps state",
-				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
-					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
-					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
-					"status":     {Type: "string", Description: "Derived stack status", Required: true},
-					"containers": {Type: "array", Description: "Per-container health state", Required: true},
-				},
-			},
-		}
-		for _, desc := range eventTypes {
-			if err := registry.RegisterEventType(desc); err != nil {
-				return fmt.Errorf("register event type %q: %w", desc.Name, err)
-			}
-		}
-
-		registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
-		registry.Subscribe("reconcile_stack", r.handleReconcileStackEvent)
-	}
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: r.cfg.Token})
-	client := github.NewClient(oauth2.NewClient(ctx, ts))
-	r.client = client
-
-	if r.cfg.TargetDir == "" {
-		r.cfg.TargetDir = "./stacks"
-	}
-	if err := checkDockerComposeAvailable(); err != nil {
-		return err
-	}
-
+	registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
+	registry.Subscribe("reconcile_stack", r.handleReconcileStackEvent)
 	return nil
+}
+
+func reconcilerEventTypes() []core.EventTypeDesc {
+	return []core.EventTypeDesc{
+		{
+			Name:        "reconcile_now",
+			Description: "Request an immediate full reconciliation",
+			PayloadSpec: map[string]core.PayloadField{
+				"force": {Type: "bool", Description: "Force even if locked", Required: false},
+			},
+		},
+		{
+			Name:        "reconcile_stack",
+			Description: "Request reconciliation for a specific stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+				"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
+			},
+		},
+		{
+			Name:        "deploy_success",
+			Description: "Stack deployed successfully",
+			PayloadSpec: map[string]core.PayloadField{
+				"duration": {Type: "time.Duration", Description: "Deploy time", Required: true},
+			},
+		},
+		{
+			Name:        "deploy_failed",
+			Description: "Stack deployment failed",
+			PayloadSpec: map[string]core.PayloadField{
+				"error": {Type: "string", Description: "Error message", Required: true},
+			},
+		},
+		{Name: "deploy_start", Description: "Stack deployment starting"},
+		{
+			Name:        core.EventTypeExecution,
+			Description: "Stack execution lifecycle update",
+			PayloadSpec: map[string]core.PayloadField{
+				"execution_id": {Type: "string", Description: "Execution identifier", Required: true},
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"full_name":    {Type: "string", Description: repoFullNameDescription, Required: true},
+				"stage":        {Type: "string", Description: "Current execution stage", Required: true},
+				"status":       {Type: "string", Description: "Current execution status", Required: true},
+			},
+		},
+		{
+			Name:        "stack_commit_changed",
+			Description: "Stack commit advanced after successful reconciliation",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":           {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":            {Type: "string", Description: repoNameDescription, Required: true},
+				"full_name":       {Type: "string", Description: repoFullNameDescription, Required: true},
+				"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
+				"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
+				"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
+				"compose_changed": {Type: "bool", Description: "Whether compose changed in the successful reconcile path", Required: true},
+			},
+		},
+		{
+			Name:        "notify_secret_conflict",
+			Description: "Duplicate secret detected during deployment",
+			PayloadSpec: map[string]core.PayloadField{
+				"key":     {Type: "string", Description: "Secret key", Required: true},
+				"winner":  {Type: "string", Description: "Plugin that provided it", Required: true},
+				"skipped": {Type: "string", Description: "Plugin that was skipped", Required: true},
+			},
+		},
+		{
+			Name:        "notify_compose_env_persistence_risk",
+			Description: "Forwarded compose env is referenced outside the service runtime environment",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+				"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
+				"services":   {Type: "array", Description: "Affected compose service names", Required: true},
+				"keys":       {Type: "array", Description: "Forwarded env keys involved in risky references", Required: true},
+				"risk_count": {Type: "int", Description: "Number of grouped risk findings", Required: true},
+				"findings":   {Type: "array", Description: "Per-service risk details", Required: true},
+			},
+		},
+		{
+			Name:        "stack_locked",
+			Description: "Stack deployment or prune was skipped because a lock file is present",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+				"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
+				"stack_path": {Type: "string", Description: "Absolute stack path", Required: true},
+				"lock_file":  {Type: "string", Description: "Absolute lock file path", Required: true},
+			},
+		},
+		{
+			Name:        "stack_health",
+			Description: "Stack health changed based on docker compose ps state",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+				"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
+				"status":     {Type: "string", Description: "Derived stack status", Required: true},
+				"containers": {Type: "array", Description: "Per-container health state", Required: true},
+			},
+		},
+	}
+}
+
+func newGitHubClient(ctx context.Context, token string) *github.Client {
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	return github.NewClient(oauth2.NewClient(ctx, ts))
 }
 
 func (r *Reconciler) validateConfig() error {
@@ -908,67 +941,89 @@ func (r *Reconciler) publish(ctx context.Context, event core.InternalEvent) {
 
 // Deployer Implementations
 func (r *Reconciler) listManagedDeployments() ([]map[string]interface{}, error) {
+	var deployments []map[string]interface{}
+	if err := r.forEachLocalRepo(func(owner, repo, repoPath string) {
+		deployments = append(deployments, r.buildManagedDeployment(owner, repo, repoPath))
+	}); err != nil {
+		return nil, err
+	}
+	return deployments, nil
+}
+
+func (r *Reconciler) forEachLocalRepo(fn func(owner, repo, repoPath string)) error {
 	entries, err := os.ReadDir(r.cfg.TargetDir)
 	if os.IsNotExist(err) {
-		return []map[string]interface{}{}, nil
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 
-	var deployments []map[string]interface{}
 	for _, userDir := range entries {
 		if !userDir.IsDir() {
 			continue
 		}
-
-		userPath := filepath.Join(r.cfg.TargetDir, userDir.Name())
-		repos, _ := os.ReadDir(userPath)
-
-		for _, repoDir := range repos {
-			if !repoDir.IsDir() {
-				continue
-			}
-
-			repoPath := filepath.Join(userPath, repoDir.Name())
-
-			status := "unknown"
-			containers, err := listComposePSContainers(repoPath)
-			if err == nil {
-				status = deploymentStatusFromComposeContainers(containers)
-			}
-
-			fullName := fmt.Sprintf("%s/%s", userDir.Name(), repoDir.Name())
-			deployment := map[string]interface{}{
-				"id":               fullName,
-				"kind":             "stack",
-				"source":           "git-ops",
-				"managed":          true,
-				"display_name":     fullName,
-				"owner":            userDir.Name(),
-				"repo":             repoDir.Name(),
-				"path":             repoPath,
-				"status":           status,
-				"execution_id":     "",
-				"execution_status": "",
-				"execution_stage":  "",
-				"last_error":       "",
-				"history":          []executionSnapshot{},
-				"container_names":  containerNames(containers),
-			}
-			if r.executionState != nil {
-				if snapshot, ok := r.executionState.snapshot(fullName); ok {
-					deployment["execution_id"] = snapshot.ExecutionID
-					deployment["execution_status"] = string(snapshot.Status)
-					deployment["execution_stage"] = string(snapshot.Stage)
-					deployment["last_error"] = snapshot.LastError
-				}
-				if history := r.executionState.snapshotHistory(fullName); history != nil {
-					deployment["history"] = history
-				}
-			}
-
-			deployments = append(deployments, deployment)
-		}
+		r.forEachRepoInUserDir(userDir.Name(), fn)
 	}
-	return deployments, nil
+	return nil
+}
+
+func (r *Reconciler) forEachRepoInUserDir(owner string, fn func(owner, repo, repoPath string)) {
+	userPath := filepath.Join(r.cfg.TargetDir, owner)
+	repos, _ := os.ReadDir(userPath)
+	for _, repoDir := range repos {
+		if !repoDir.IsDir() {
+			continue
+		}
+		fn(owner, repoDir.Name(), filepath.Join(userPath, repoDir.Name()))
+	}
+}
+
+func (r *Reconciler) buildManagedDeployment(owner, repo, repoPath string) map[string]interface{} {
+	fullName := fmt.Sprintf("%s/%s", owner, repo)
+	status, containers := deploymentStatusAtPath(repoPath)
+	deployment := map[string]interface{}{
+		"id":               fullName,
+		"kind":             "stack",
+		"source":           "git-ops",
+		"managed":          true,
+		"display_name":     fullName,
+		"owner":            owner,
+		"repo":             repo,
+		"path":             repoPath,
+		"status":           status,
+		"execution_id":     "",
+		"execution_status": "",
+		"execution_stage":  "",
+		"last_error":       "",
+		"history":          []executionSnapshot{},
+		"container_names":  containerNames(containers),
+	}
+	r.addExecutionStateFields(fullName, deployment)
+	return deployment
+}
+
+func deploymentStatusAtPath(repoPath string) (string, []composePSContainer) {
+	containers, err := listComposePSContainers(repoPath)
+	if err != nil {
+		return "unknown", nil
+	}
+	return deploymentStatusFromComposeContainers(containers), containers
+}
+
+func (r *Reconciler) addExecutionStateFields(fullName string, deployment map[string]interface{}) {
+	if r.executionState == nil {
+		return
+	}
+	if snapshot, ok := r.executionState.snapshot(fullName); ok {
+		deployment["execution_id"] = snapshot.ExecutionID
+		deployment["execution_status"] = string(snapshot.Status)
+		deployment["execution_stage"] = string(snapshot.Stage)
+		deployment["last_error"] = snapshot.LastError
+	}
+	if history := r.executionState.snapshotHistory(fullName); history != nil {
+		deployment["history"] = history
+	}
 }
 
 func (r *Reconciler) listDeployments() ([]map[string]interface{}, error) {
@@ -1217,43 +1272,22 @@ func (r *Reconciler) streamContainerLogs(ctx context.Context, container, lines s
 }
 
 func (r *Reconciler) processLocalState(ctx context.Context, desiredState map[string]*github.Repository, removalState map[string]bool) {
-	// Walk TARGET_DIR/OWNER/REPO
-	entries, err := os.ReadDir(r.cfg.TargetDir)
-	if os.IsNotExist(err) {
+	_ = r.forEachLocalRepo(func(owner, repo, repoPath string) {
+		r.processLocalRepoState(ctx, owner, repo, repoPath, desiredState, removalState)
+	})
+}
+
+func (r *Reconciler) processLocalRepoState(ctx context.Context, owner, repo, repoPath string, desiredState map[string]*github.Repository, removalState map[string]bool) {
+	currentKey := fmt.Sprintf("%s/%s", owner, repo)
+	if removalState[currentKey] {
+		r.logger.Info("Explicit removal detected", "full_name", currentKey)
+		if !r.pruneService(ctx, currentKey, owner, repo, repoPath) {
+			r.logger.Info("Skipping prune while execution is active", "full_name", currentKey)
+		}
 		return
 	}
-
-	for _, userDir := range entries {
-		if !userDir.IsDir() {
-			continue
-		}
-
-		userPath := filepath.Join(r.cfg.TargetDir, userDir.Name())
-		repos, _ := os.ReadDir(userPath)
-
-		for _, repoDir := range repos {
-			if !repoDir.IsDir() {
-				continue
-			}
-
-			// Construct key "Owner/Repo"
-			currentKey := fmt.Sprintf("%s/%s", userDir.Name(), repoDir.Name())
-			fullPath := filepath.Join(userPath, repoDir.Name())
-
-			isDesired := desiredState[currentKey] != nil
-			isRemoval := removalState[currentKey]
-
-			if isRemoval {
-				r.logger.Info("Explicit removal detected", "full_name", currentKey)
-				if !r.pruneService(ctx, currentKey, userDir.Name(), repoDir.Name(), fullPath) {
-					r.logger.Info("Skipping prune while execution is active", "full_name", currentKey)
-				}
-			} else if !isDesired {
-				// Exists locally, but NOT in Desired, and NOT in Removal.
-				// This is the "Safety Warning" - Do NOT Delete.
-				r.logger.Warn("Sync Divergence: Local service exists but not found in Desired State. Skipping removal.", "full_name", currentKey)
-			}
-		}
+	if desiredState[currentKey] == nil {
+		r.logger.Warn("Sync Divergence: Local service exists but not found in Desired State. Skipping removal.", "full_name", currentKey)
 	}
 }
 
@@ -1349,75 +1383,16 @@ func (r *Reconciler) runRestartOnly(ctx context.Context, fullName, repoLocalPath
 }
 
 func (r *Reconciler) prepareComposeEnvironment(ctx context.Context, owner, repo, repoLocalPath string, logger *slog.Logger) ([]string, []string, func(), error) {
-	secretPlugins := []core.Plugin{}
-	if r.registry != nil {
-		secretPlugins = r.registry.GetPluginsWithCapability(core.CapabilitySecrets)
-	}
-
-	secretEnv := []string{}
-	secretValues := make(map[string]string)
-	secretSources := make(map[string]string)
-
-	for _, p := range secretPlugins {
-		res, err := p.Execute(ctx, "get_secrets", map[string]interface{}{
-			"owner": owner,
-			"repo":  repo,
-		})
-		if err != nil {
-			return nil, nil, noOpCleanup, err
-		}
-
-		secrets, ok := res.(map[string]string)
-		if !ok {
-			continue
-		}
-
-		for k, v := range secrets {
-			if _, exists := secretValues[k]; exists {
-				winner := secretSources[k]
-				logger.Warn("Duplicate secret key, skipping", "key", k, "winner", winner, "skipped", p.Name())
-				r.publish(ctx, core.InternalEvent{
-					Type:    "notify_secret_conflict",
-					Source:  "reconciler",
-					Message: fmt.Sprintf("Secret %s already provided by %s; skipping %s", k, winner, p.Name()),
-					Details: map[string]interface{}{
-						"key":     k,
-						"winner":  winner,
-						"skipped": p.Name(),
-					},
-				})
-				continue
-			}
-			secretValues[k] = v
-			secretSources[k] = p.Name()
-		}
-	}
-
-	persistedSecretValues, err := loadPersistedComposeEnv(repoLocalPath)
+	secretValues, secretSources, err := r.collectComposeSecrets(ctx, owner, repo, logger)
 	if err != nil {
 		return nil, nil, noOpCleanup, err
 	}
-	for k, v := range persistedSecretValues {
-		if _, exists := secretValues[k]; exists {
-			continue
-		}
-		secretValues[k] = v
-		secretSources[k] = "persisted_compose_env"
-	}
-
-	if len(secretValues) > 0 {
-		keys := make([]string, 0, len(secretValues))
-		for k := range secretValues {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			secretEnv = append(secretEnv, fmt.Sprintf("%s=%s", k, secretValues[k]))
-		}
+	if err := mergePersistedComposeSecrets(repoLocalPath, secretValues, secretSources); err != nil {
+		return nil, nil, noOpCleanup, err
 	}
 
 	if err := persistComposeEnv(repoLocalPath, secretValues); err != nil {
-		return nil, nil, func() {}, err
+		return nil, nil, noOpCleanup, err
 	}
 
 	runtimeFiles, err := r.collectRuntimeFiles(ctx, owner, repo, logger, secretSources)
@@ -1434,7 +1409,92 @@ func (r *Reconciler) prepareComposeEnvironment(ctx context.Context, owner, repo,
 		}
 	}
 
-	return secretEnv, runtimeFileEnv, cleanupRuntimeFiles, nil
+	return secretEnvFromValues(secretValues), runtimeFileEnv, cleanupRuntimeFiles, nil
+}
+
+func (r *Reconciler) collectComposeSecrets(ctx context.Context, owner, repo string, logger *slog.Logger) (map[string]string, map[string]string, error) {
+	secretValues := make(map[string]string)
+	secretSources := make(map[string]string)
+	for _, p := range r.secretPlugins() {
+		secrets, err := loadSecretsFromPlugin(ctx, p, owner, repo)
+		if err != nil {
+			return nil, nil, err
+		}
+		r.mergeSecretValues(ctx, p.Name(), secrets, secretValues, secretSources, logger)
+	}
+	return secretValues, secretSources, nil
+}
+
+func (r *Reconciler) secretPlugins() []core.Plugin {
+	if r.registry == nil {
+		return nil
+	}
+	return r.registry.GetPluginsWithCapability(core.CapabilitySecrets)
+}
+
+func loadSecretsFromPlugin(ctx context.Context, p core.Plugin, owner, repo string) (map[string]string, error) {
+	res, err := p.Execute(ctx, "get_secrets", map[string]interface{}{"owner": owner, "repo": repo})
+	if err != nil {
+		return nil, err
+	}
+	secrets, ok := res.(map[string]string)
+	if !ok {
+		return nil, nil
+	}
+	return secrets, nil
+}
+
+func (r *Reconciler) mergeSecretValues(ctx context.Context, pluginName string, secrets, secretValues, secretSources map[string]string, logger *slog.Logger) {
+	for key, value := range secrets {
+		if winner, exists := secretSources[key]; exists {
+			r.publishSecretConflict(ctx, key, winner, pluginName, logger)
+			continue
+		}
+		secretValues[key] = value
+		secretSources[key] = pluginName
+	}
+}
+
+func (r *Reconciler) publishSecretConflict(ctx context.Context, key, winner, skipped string, logger *slog.Logger) {
+	logger.Warn("Duplicate secret key, skipping", "key", key, "winner", winner, "skipped", skipped)
+	r.publish(ctx, core.InternalEvent{
+		Type:    "notify_secret_conflict",
+		Source:  "reconciler",
+		Message: fmt.Sprintf("Secret %s already provided by %s; skipping %s", key, winner, skipped),
+		Details: map[string]interface{}{
+			"key":     key,
+			"winner":  winner,
+			"skipped": skipped,
+		},
+	})
+}
+
+func mergePersistedComposeSecrets(repoLocalPath string, secretValues, secretSources map[string]string) error {
+	persistedSecretValues, err := loadPersistedComposeEnv(repoLocalPath)
+	if err != nil {
+		return err
+	}
+	for key, value := range persistedSecretValues {
+		if _, exists := secretValues[key]; exists {
+			continue
+		}
+		secretValues[key] = value
+		secretSources[key] = "persisted_compose_env"
+	}
+	return nil
+}
+
+func secretEnvFromValues(secretValues map[string]string) []string {
+	keys := make([]string, 0, len(secretValues))
+	for key := range secretValues {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	secretEnv := make([]string, 0, len(keys))
+	for _, key := range keys {
+		secretEnv = append(secretEnv, fmt.Sprintf("%s=%s", key, secretValues[key]))
+	}
+	return secretEnv
 }
 
 func persistedComposeEnvPath(repoLocalPath string) string {
@@ -1708,87 +1768,86 @@ func isStackLocked(stackPath string) (bool, string) {
 }
 
 func (r *Reconciler) runDeploySequence(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, logger *slog.Logger) {
-	deployStart := time.Now()
+	deployCtx := deployRunContext{
+		fullName:    fullName,
+		repo:        repo,
+		spec:        spec,
+		logger:      logger,
+		deployStart: time.Now(),
+	}
 
-	if !r.writeComposeFile(ctx, fullName, repo, spec, logger, deployStart) {
+	if !r.writeComposeFile(ctx, deployCtx) {
 		return
 	}
 
-	if !r.fetchRepoHookScripts(ctx, fullName, repo, spec, logger, deployStart) {
+	if !r.fetchRepoHookScripts(ctx, deployCtx) {
 		return
 	}
 
-	hookEnv, secretEnv, runtimeFileEnv, cleanupRuntimeFiles, ok := r.prepareDeployEnvironments(ctx, fullName, repo, spec, logger, deployStart)
+	hookEnv, secretEnv, runtimeFileEnv, cleanupRuntimeFiles, ok := r.prepareDeployEnvironments(ctx, deployCtx)
 	if !ok {
 		return
 	}
 	defer cleanupRuntimeFiles()
 
-	if !r.runPreHooks(ctx, fullName, repo, spec, hookEnv, logger, deployStart) {
+	if !r.runPreHooks(ctx, deployCtx, hookEnv) {
 		return
 	}
 
-	if !r.runComposeUpPhase(ctx, fullName, repo, spec, secretEnv, runtimeFileEnv, logger, deployStart) {
+	if !r.runComposeUpPhase(ctx, deployCtx, secretEnv, runtimeFileEnv) {
 		return
 	}
 
-	if !r.runPostHooks(ctx, fullName, repo, spec, hookEnv, logger, deployStart) {
+	if !r.runPostHooks(ctx, deployCtx, hookEnv) {
 		return
 	}
 
-	logger.Info("Deploy sequence complete")
-	r.publishDeployEvent(ctx, "deploy_success", repo, "success", "", time.Since(deployStart).String(), deployStart)
-	r.completeSuccessfulStack(ctx, fullName, repo, spec.repoLocalPath, spec.currentCommitSHA, true)
+	deployCtx.logger.Info("Deploy sequence complete")
+	r.publishDeployEvent(ctx, "deploy_success", deployCtx.repo, deploySuccessResult(deployCtx))
+	r.completeSuccessfulStack(ctx, deployCtx.fullName, deployCtx.repo, deployCtx.spec.repoLocalPath, deployCtx.spec.currentCommitSHA, true)
 }
 
-func (r *Reconciler) writeComposeFile(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, logger *slog.Logger, deployStart time.Time) bool {
-	r.publishDeployEvent(ctx, "deploy_start", repo, "starting", "", "", deployStart)
+func (r *Reconciler) writeComposeFile(ctx context.Context, deployCtx deployRunContext) bool {
+	r.publishDeployEvent(ctx, "deploy_start", deployCtx.repo, deployStartResult(deployCtx))
 
-	if err := os.WriteFile(spec.filePath, []byte(spec.content), 0644); err != nil {
-		logger.Error("Failed to write docker-compose.yml", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageDiff, err)
+	if err := os.WriteFile(deployCtx.spec.filePath, []byte(deployCtx.spec.content), 0644); err != nil {
+		deployCtx.logger.Error("Failed to write docker-compose.yml", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+		r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageDiff, err)
 		return false
 	}
 
 	return true
 }
 
-func (r *Reconciler) fetchRepoHookScripts(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, logger *slog.Logger, deployStart time.Time) bool {
-	r.markExecutionRunning(ctx, fullName, core.ExecutionStageHooks)
-
-	if err := r.fetchRepoHookScriptsForStage(ctx, *repo.Owner.Login, *repo.Name, "pre", spec.repoLocalPath); err != nil {
-		logger.Error("Global Fetch Pre-Hook failed, aborting deploy", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
-		return false
+func (r *Reconciler) fetchRepoHookScripts(ctx context.Context, deployCtx deployRunContext) bool {
+	r.markExecutionRunning(ctx, deployCtx.fullName, core.ExecutionStageHooks)
+	for _, stage := range []string{"pre", "post"} {
+		if err := r.fetchRepoHookScriptsForStage(ctx, *deployCtx.repo.Owner.Login, *deployCtx.repo.Name, stage, deployCtx.spec.repoLocalPath); err != nil {
+			deployCtx.logger.Error(fmt.Sprintf("Global Fetch %s-Hook failed, aborting deploy", strings.Title(stage)), "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+			r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
+			return false
+		}
 	}
-
-	if err := r.fetchRepoHookScriptsForStage(ctx, *repo.Owner.Login, *repo.Name, "post", spec.repoLocalPath); err != nil {
-		logger.Error("Global Fetch Post-Hook failed, aborting deploy", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
-		return false
-	}
-
 	return true
 }
 
-func (r *Reconciler) prepareDeployEnvironments(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, logger *slog.Logger, deployStart time.Time) ([]string, []string, []string, func(), bool) {
-	secretEnv, runtimeFileEnv, cleanupRuntimeFiles, err := r.prepareComposeEnvironment(ctx, *repo.Owner.Login, *repo.Name, spec.repoLocalPath, logger)
+func (r *Reconciler) prepareDeployEnvironments(ctx context.Context, deployCtx deployRunContext) ([]string, []string, []string, func(), bool) {
+	secretEnv, runtimeFileEnv, cleanupRuntimeFiles, err := r.prepareComposeEnvironment(ctx, *deployCtx.repo.Owner.Login, *deployCtx.repo.Name, deployCtx.spec.repoLocalPath, deployCtx.logger)
 	if err != nil {
-		logger.Error("Failed to prepare compose environment", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
+		deployCtx.logger.Error("Failed to prepare compose environment", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+		r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
 		return nil, nil, nil, noOpCleanup, false
 	}
 
-	r.warnOnComposeEnvPersistenceRisks(ctx, repo, spec.content, secretEnv, logger)
+	r.warnOnComposeEnvPersistenceRisks(ctx, deployCtx.repo, deployCtx.spec.content, secretEnv, deployCtx.logger)
 
 	hookEnv := []string{
-		fmt.Sprintf("REPO_NAME=%s", *repo.Name),
-		fmt.Sprintf("REPO_OWNER=%s", *repo.Owner.Login),
-		fmt.Sprintf("TARGET_DIR=%s", spec.repoLocalPath),
+		fmt.Sprintf("REPO_NAME=%s", *deployCtx.repo.Name),
+		fmt.Sprintf("REPO_OWNER=%s", *deployCtx.repo.Owner.Login),
+		fmt.Sprintf("TARGET_DIR=%s", deployCtx.spec.repoLocalPath),
 	}
 	// Secrets are intentionally excluded from hook environments.
 	// Hooks receive only service context values. If a hook needs credentials,
@@ -1798,60 +1857,60 @@ func (r *Reconciler) prepareDeployEnvironments(ctx context.Context, fullName str
 	return hookEnv, secretEnv, runtimeFileEnv, cleanupRuntimeFiles, true
 }
 
-func (r *Reconciler) runPreHooks(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, hookEnv []string, logger *slog.Logger, deployStart time.Time) bool {
+func (r *Reconciler) runPreHooks(ctx context.Context, deployCtx deployRunContext, hookEnv []string) bool {
 	if r.cfg.GlobalHooksDir != "" {
-		if err := utils.ExecuteHooks(ctx, filepath.Join(r.cfg.GlobalHooksDir, "pre"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
-			logger.Error("Global Pre-hook failed, aborting deploy", "error", err)
-			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-			r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
+		if err := utils.ExecuteHooks(ctx, filepath.Join(r.cfg.GlobalHooksDir, "pre"), hookEnv, deployCtx.logger, r.cfg.HookTimeout); err != nil {
+			deployCtx.logger.Error("Global Pre-hook failed, aborting deploy", "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+			r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
 			return false
 		}
 	}
 
-	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, deployDirName, "pre"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
-		logger.Error("Repo Pre-hook failed, aborting deploy", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
+	if err := utils.ExecuteHooks(ctx, filepath.Join(deployCtx.spec.repoLocalPath, deployDirName, "pre"), hookEnv, deployCtx.logger, r.cfg.HookTimeout); err != nil {
+		deployCtx.logger.Error("Repo Pre-hook failed, aborting deploy", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+		r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
 		return false
 	}
 
 	return true
 }
 
-func (r *Reconciler) runComposeUpPhase(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, secretEnv, runtimeFileEnv []string, logger *slog.Logger, deployStart time.Time) bool {
-	r.markExecutionRunning(ctx, fullName, core.ExecutionStageComposeUp)
+func (r *Reconciler) runComposeUpPhase(ctx context.Context, deployCtx deployRunContext, secretEnv, runtimeFileEnv []string) bool {
+	r.markExecutionRunning(ctx, deployCtx.fullName, core.ExecutionStageComposeUp)
 
-	if err := runComposePreflight(spec.repoLocalPath, runtimeFileEnv); err != nil {
-		logger.Error("Preflight failed", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+	if err := runComposePreflight(deployCtx.spec.repoLocalPath, runtimeFileEnv); err != nil {
+		deployCtx.logger.Error("Preflight failed", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+		r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageComposeUp, err)
 		return false
 	}
 
-	logger.Info("Running docker compose up")
-	if err := executeComposeCommand(spec.repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d", composeRemoveOrphansFlag); err != nil {
-		logger.Error("Deploy failed", "error", err)
-		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+	deployCtx.logger.Info("Running docker compose up")
+	if err := executeComposeCommand(deployCtx.spec.repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d", composeRemoveOrphansFlag); err != nil {
+		deployCtx.logger.Error("Deploy failed", "error", err)
+		r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+		r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageComposeUp, err)
 		return false
 	}
 
 	return true
 }
 
-func (r *Reconciler) runPostHooks(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, hookEnv []string, logger *slog.Logger, deployStart time.Time) bool {
-	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, deployDirName, "post"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
-		logger.Error("Repo Post-hook failed", "error", err)
+func (r *Reconciler) runPostHooks(ctx context.Context, deployCtx deployRunContext, hookEnv []string) bool {
+	if err := utils.ExecuteHooks(ctx, filepath.Join(deployCtx.spec.repoLocalPath, deployDirName, "post"), hookEnv, deployCtx.logger, r.cfg.HookTimeout); err != nil {
+		deployCtx.logger.Error("Repo Post-hook failed", "error", err)
 	}
 
 	if r.cfg.GlobalHooksDir != "" {
 		// Repo post-hooks are best-effort and only log on failure, while global
 		// post-hooks are treated as deploy-critical and still fail the execution.
 		// This preserves the current behavior until hook policy is revisited.
-		if err := utils.ExecuteHooks(ctx, filepath.Join(r.cfg.GlobalHooksDir, "post"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
-			logger.Error("Repo Post-hook execution failed", "error", err)
-			r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
-			r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
+		if err := utils.ExecuteHooks(ctx, filepath.Join(r.cfg.GlobalHooksDir, "post"), hookEnv, deployCtx.logger, r.cfg.HookTimeout); err != nil {
+			deployCtx.logger.Error("Repo Post-hook execution failed", "error", err)
+			r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
+			r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
 			return false
 		}
 	}
@@ -1859,42 +1918,42 @@ func (r *Reconciler) runPostHooks(ctx context.Context, fullName string, repo *gi
 	return true
 }
 
-func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string, logger *slog.Logger, existingSources map[string]string) ([]core.RuntimeFile, error) {
-	runtimePlugins := []core.Plugin{}
-	if r.registry != nil {
-		runtimePlugins = r.registry.GetPluginsWithCapability(core.CapabilityRuntimeFiles)
+func deployStartResult(deployCtx deployRunContext) deployEventResult {
+	return deployEventResult{status: "starting", startedAt: deployCtx.deployStart}
+}
+
+func deploySuccessResult(deployCtx deployRunContext) deployEventResult {
+	return deployEventResult{
+		status:    "success",
+		duration:  time.Since(deployCtx.deployStart).String(),
+		startedAt: deployCtx.deployStart,
 	}
+}
+
+func deployFailureResult(status string, err error, deployCtx deployRunContext) deployEventResult {
+	result := deployEventResult{status: status, startedAt: deployCtx.deployStart}
+	if err != nil {
+		result.message = err.Error()
+	}
+	return result
+}
+
+func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string, logger *slog.Logger, existingSources map[string]string) ([]core.RuntimeFile, error) {
 	files := make([]core.RuntimeFile, 0)
 	runtimeSources := make(map[string]string)
 
-	for _, p := range runtimePlugins {
-		res, err := p.Execute(ctx, "get_runtime_files", map[string]interface{}{
-			"owner": owner,
-			"repo":  repo,
-		})
+	for _, p := range r.runtimeFilePlugins() {
+		runtimeFiles, err := runtimeFilesFromPlugin(ctx, p, owner, repo)
 		if err != nil {
-			return nil, fmt.Errorf("plugin %s: %w", p.Name(), err)
-		}
-
-		runtimeFiles, ok := res.([]core.RuntimeFile)
-		if !ok {
-			return nil, fmt.Errorf("plugin %s returned unexpected runtime file payload", p.Name())
+			return nil, err
 		}
 
 		for _, file := range runtimeFiles {
-			key := strings.TrimSpace(file.EnvKey)
-			if key == "" {
-				return nil, fmt.Errorf("plugin %s returned runtime file with empty env key", p.Name())
+			key, err := validateRuntimeFileKey(file.EnvKey, p.Name())
+			if err != nil {
+				return nil, err
 			}
-			if strings.Contains(key, "=") {
-				return nil, fmt.Errorf("plugin %s returned invalid env key %q", p.Name(), key)
-			}
-
-			if winner, exists := existingSources[key]; exists {
-				logger.Warn("Duplicate env key from runtime file plugin, skipping", "key", key, "winner", winner, "skipped", p.Name())
-				continue
-			}
-			if winner, exists := runtimeSources[key]; exists {
+			if winner, skip := duplicateRuntimeFileSource(key, existingSources, runtimeSources); skip {
 				logger.Warn("Duplicate env key from runtime file plugin, skipping", "key", key, "winner", winner, "skipped", p.Name())
 				continue
 			}
@@ -1906,6 +1965,47 @@ func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string
 	}
 
 	return files, nil
+}
+
+func (r *Reconciler) runtimeFilePlugins() []core.Plugin {
+	if r.registry == nil {
+		return nil
+	}
+	return r.registry.GetPluginsWithCapability(core.CapabilityRuntimeFiles)
+}
+
+func runtimeFilesFromPlugin(ctx context.Context, p core.Plugin, owner, repo string) ([]core.RuntimeFile, error) {
+	res, err := p.Execute(ctx, "get_runtime_files", map[string]interface{}{"owner": owner, "repo": repo})
+	if err != nil {
+		return nil, fmt.Errorf("plugin %s: %w", p.Name(), err)
+	}
+	runtimeFiles, ok := res.([]core.RuntimeFile)
+	if !ok {
+		return nil, fmt.Errorf("plugin %s returned unexpected runtime file payload", p.Name())
+	}
+	return runtimeFiles, nil
+}
+
+func validateRuntimeFileKey(envKey, pluginName string) (string, error) {
+	key := strings.TrimSpace(envKey)
+	switch {
+	case key == "":
+		return "", fmt.Errorf("plugin %s returned runtime file with empty env key", pluginName)
+	case strings.Contains(key, "="):
+		return "", fmt.Errorf("plugin %s returned invalid env key %q", pluginName, key)
+	default:
+		return key, nil
+	}
+}
+
+func duplicateRuntimeFileSource(key string, existingSources, runtimeSources map[string]string) (string, bool) {
+	if winner, exists := existingSources[key]; exists {
+		return winner, true
+	}
+	if winner, exists := runtimeSources[key]; exists {
+		return winner, true
+	}
+	return "", false
 }
 
 func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error) {
@@ -1925,27 +2025,13 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 
 	envToPath := make(map[string]string, len(files))
 	for idx, file := range files {
-		envKey := strings.TrimSpace(file.EnvKey)
-		if envKey == "" || strings.Contains(envKey, "=") {
+		envKey, filename, mode, err := runtimeFileMaterializationSpec(idx, file)
+		if err != nil {
 			cleanup()
-			return nil, noOpCleanup, fmt.Errorf("invalid runtime file env key")
-		}
-
-		filename := strings.TrimSpace(file.Filename)
-		if filename == "" {
-			filename = fmt.Sprintf("runtime_file_%d", idx)
-		}
-		filename = filepath.Base(filename)
-		if filename == "" || filename == "." {
-			cleanup()
-			return nil, noOpCleanup, fmt.Errorf("invalid runtime file name for %s", envKey)
+			return nil, noOpCleanup, err
 		}
 
 		targetPath := filepath.Join(runtimeDir, fmt.Sprintf("%02d_%s", idx, filename))
-		mode := os.FileMode(file.Mode & 0o777)
-		if mode == 0 {
-			mode = 0600
-		}
 		if err := os.WriteFile(targetPath, file.Content, mode); err != nil {
 			cleanup()
 			return nil, noOpCleanup, fmt.Errorf("write runtime file for %s: %w", envKey, err)
@@ -1967,28 +2053,58 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 	return env, cleanup, nil
 }
 
-func noOpCleanup() {
-	// Some code paths have nothing to clean up but still need a valid cleanup callback.
+func runtimeFileMaterializationSpec(idx int, file core.RuntimeFile) (string, string, os.FileMode, error) {
+	envKey := strings.TrimSpace(file.EnvKey)
+	if envKey == "" || strings.Contains(envKey, "=") {
+		return "", "", 0, fmt.Errorf("invalid runtime file env key")
+	}
+
+	filename := strings.TrimSpace(file.Filename)
+	if filename == "" {
+		filename = fmt.Sprintf("runtime_file_%d", idx)
+	}
+	filename = filepath.Base(filename)
+	if filename == "" || filename == "." {
+		return "", "", 0, fmt.Errorf("invalid runtime file name for %s", envKey)
+	}
+
+	mode := os.FileMode(file.Mode & 0o777)
+	if mode == 0 {
+		mode = 0600
+	}
+	return envKey, filename, mode, nil
 }
 
-func (r *Reconciler) publishDeployEvent(ctx context.Context, eventType string, repo *github.Repository, status, message, duration string, start time.Time) {
-	if repo == nil || repo.Owner == nil || repo.Name == nil {
+func noOpCleanup() {
+	// Some call sites require a cleanup callback even when there is nothing to release.
+	// Keeping a named no-op function avoids nil checks and documents that behavior.
+}
+
+func (r *Reconciler) publishDeployEvent(ctx context.Context, eventType string, repo *github.Repository, result deployEventResult) {
+	if repo == nil || repo.Owner == nil || repo.Name == nil || repo.Owner.Login == nil {
 		return
 	}
 	r.publish(ctx, core.InternalEvent{
 		Type:    core.EventTypeName(eventType),
 		Source:  "reconciler",
 		Repo:    *repo.Name,
-		Message: message,
+		Message: result.message,
 		Details: map[string]interface{}{
 			"owner":      *repo.Owner.Login,
 			"repo":       *repo.Name,
 			"full_name":  fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name),
-			"status":     status,
-			"duration":   duration,
-			"started_at": start.Format(time.RFC3339),
+			"status":     result.status,
+			"duration":   result.duration,
+			"started_at": result.startedAt.Format(time.RFC3339),
 		},
 	})
+}
+
+type deployEventResult struct {
+	status    string
+	message   string
+	duration  string
+	startedAt time.Time
 }
 
 func (r *Reconciler) publishStackLocked(ctx context.Context, owner, repo, fullName, stackPath, lockPath string) {
@@ -2012,7 +2128,7 @@ func (r *Reconciler) fetchRepoHookScriptsForStage(ctx context.Context, owner, re
 	path := fmt.Sprintf("%s/%s", deployDirName, stage)
 	_, dirContent, _, err := r.client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
+		if isMissingHookDirectoryError(err) {
 			return nil
 		}
 		return err
@@ -2027,28 +2143,37 @@ func (r *Reconciler) fetchRepoHookScriptsForStage(ctx context.Context, owner, re
 		if fileMeta.GetType() != "file" || !strings.HasSuffix(fileMeta.GetName(), ".sh") {
 			continue
 		}
-
-		fileContent, _, _, err := r.client.Repositories.GetContents(ctx, owner, repo, fileMeta.GetPath(), nil)
-		if err != nil {
-			r.logger.Error("Failed to fetch hook content", "file", fileMeta.GetName(), "error", err)
-			// Pre-hooks affect deploy correctness and must be present before execution.
-			// Post-hooks run after the deploy result is already known, so fetch failures stay non-fatal.
-			if stage == "pre" {
-				return fmt.Errorf("failed to fetch pre-hook %s: %w", fileMeta.GetName(), err)
-			}
-			continue
-		}
-
-		decoded, err := fileContent.GetContent()
-		if err != nil {
-			continue
-		}
-
-		localScriptPath := filepath.Join(hooksDir, fileMeta.GetName())
-
-		if err := os.WriteFile(localScriptPath, []byte(decoded), 0755); err != nil {
+		if err := r.writeRepoHookScript(ctx, owner, repo, stage, hooksDir, fileMeta); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func isMissingHookDirectoryError(err error) bool {
+	return strings.Contains(err.Error(), "404")
+}
+
+func (r *Reconciler) writeRepoHookScript(ctx context.Context, owner, repo, stage, hooksDir string, fileMeta *github.RepositoryContent) error {
+	decoded, err := r.fetchRepoHookContent(ctx, owner, repo, fileMeta)
+	if err != nil {
+		r.logger.Error("Failed to fetch hook content", "file", fileMeta.GetName(), "error", err)
+		// Pre-hooks affect deploy correctness and must be present before execution.
+		// Post-hooks run after the deploy result is already known, so fetch failures stay non-fatal.
+		if stage == "pre" {
+			return fmt.Errorf("failed to fetch pre-hook %s: %w", fileMeta.GetName(), err)
+		}
+		return nil
+	}
+
+	localScriptPath := filepath.Join(hooksDir, fileMeta.GetName())
+	return os.WriteFile(localScriptPath, []byte(decoded), 0755)
+}
+
+func (r *Reconciler) fetchRepoHookContent(ctx context.Context, owner, repo string, fileMeta *github.RepositoryContent) (string, error) {
+	fileContent, _, _, err := r.client.Repositories.GetContents(ctx, owner, repo, fileMeta.GetPath(), nil)
+	if err != nil {
+		return "", err
+	}
+	return fileContent.GetContent()
 }

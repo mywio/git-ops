@@ -18,6 +18,8 @@ var (
 	errRuntimeFilesNotMaterialized = errors.New("runtime files not materialized")
 )
 
+const wrapPathErrorFormat = "%w: %s: %w"
+
 var localComposeFilenames = []string{"compose.yaml", "docker-compose.yml"}
 
 type composeCommandError struct {
@@ -81,7 +83,7 @@ func localComposeFilePath(repoLocalPath string) (string, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return "", fmt.Errorf("%w: %s: %w", errComposeFileMissing, composePath, err)
+			return "", fmt.Errorf(wrapPathErrorFormat, errComposeFileMissing, composePath, err)
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf("%w: %s is a directory", errComposeFileMissing, composePath)
@@ -95,15 +97,15 @@ func localComposeFilePath(repoLocalPath string) (string, error) {
 func ensureDirectoryWritable(dir string) error {
 	file, err := os.CreateTemp(dir, ".preflight-*")
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", errTargetDirNotWritable, dir, err)
+		return fmt.Errorf(wrapPathErrorFormat, errTargetDirNotWritable, dir, err)
 	}
 	path := file.Name()
 	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(path)
-		return fmt.Errorf("%w: %s: %w", errTargetDirNotWritable, dir, closeErr)
+		return fmt.Errorf(wrapPathErrorFormat, errTargetDirNotWritable, dir, closeErr)
 	}
 	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("%w: %s: %w", errTargetDirNotWritable, dir, err)
+		return fmt.Errorf(wrapPathErrorFormat, errTargetDirNotWritable, dir, err)
 	}
 	return nil
 }
@@ -119,7 +121,7 @@ func validateRuntimeFileEnv(runtimeFileEnv []string) error {
 
 		info, err := os.Stat(value)
 		if err != nil {
-			return fmt.Errorf("%w: %s: %w", errRuntimeFilesNotMaterialized, key, err)
+			return fmt.Errorf(wrapPathErrorFormat, errRuntimeFilesNotMaterialized, key, err)
 		}
 		if info.IsDir() {
 			return fmt.Errorf("%w: %s points to directory %s", errRuntimeFilesNotMaterialized, key, value)
