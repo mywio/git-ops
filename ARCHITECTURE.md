@@ -52,6 +52,11 @@ Key types:
 are stored on the manager instance rather than in package globals, which keeps
 tests isolated and avoids cross-manager event leakage.
 
+Plugin loading can be filtered at runtime with `core.plugins` or the
+comma-separated `PLUGINS_ALLOW` environment variable. When the allowlist is
+empty, `ModuleManager.LoadPlugins` loads every `.so` in the configured plugins
+directory.
+
 ## Configuration Model
 
 Configuration is sectioned and plugin-oriented.
@@ -299,6 +304,8 @@ Important details:
 - the binary version is injected through `-ldflags`
 - UI build requires Node.js `20.19+`
 - plugin targets that span multiple source files use `*.go`
+- official release artifacts and the published container image target `linux/amd64`
+- plugins can be filtered at load time through `core.plugins` / `PLUGINS_ALLOW`
 
 CI currently builds, vets, lints, and tests the repository.
 

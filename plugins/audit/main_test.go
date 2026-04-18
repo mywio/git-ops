@@ -16,19 +16,19 @@ import (
 
 func TestMemoryStore(t *testing.T) {
 	store := newMemoryStore()
-	defer store.Close()
+	defer func() { require.NoError(t, store.Close()) }()
 
 	runStoreTests(t, store)
 }
 
 func TestSQLiteStore(t *testing.T) {
 	dbPath := "test_audit.db"
-	os.Remove(dbPath)
-	defer os.Remove(dbPath)
+	_ = os.Remove(dbPath)
+	defer func() { _ = os.Remove(dbPath) }()
 
 	store, err := newSQLiteStore(dbPath)
 	require.NoError(t, err)
-	defer store.Close()
+	defer func() { require.NoError(t, store.Close()) }()
 
 	runStoreTests(t, store)
 }
@@ -112,9 +112,9 @@ func TestStoreSupportsExecutionAwareQueries(t *testing.T) {
 			setup: func(t *testing.T) AuditStore {
 				t.Helper()
 				dbPath := "test_audit_execution_filters.db"
-				os.Remove(dbPath)
+				_ = os.Remove(dbPath)
 				t.Cleanup(func() {
-					os.Remove(dbPath)
+					_ = os.Remove(dbPath)
 				})
 
 				store, err := newSQLiteStore(dbPath)
@@ -127,7 +127,7 @@ func TestStoreSupportsExecutionAwareQueries(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := tc.setup(t)
-			defer store.Close()
+			defer func() { require.NoError(t, store.Close()) }()
 
 			now := time.Now().UTC()
 			events := []core.InternalEvent{
@@ -333,8 +333,8 @@ func TestAuditPluginExecuteLastEventsSupportsExecutionFilters(t *testing.T) {
 
 func TestSQLiteStoreSupportsExecutionFiltersForLegacyJSONRows(t *testing.T) {
 	dbPath := "test_audit_legacy_execution_filters.db"
-	os.Remove(dbPath)
-	defer os.Remove(dbPath)
+	_ = os.Remove(dbPath)
+	defer func() { _ = os.Remove(dbPath) }()
 
 	legacyDB, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -370,7 +370,7 @@ func TestSQLiteStoreSupportsExecutionFiltersForLegacyJSONRows(t *testing.T) {
 
 	store, err := newSQLiteStore(dbPath)
 	require.NoError(t, err)
-	defer store.Close()
+	defer func() { require.NoError(t, store.Close()) }()
 
 	events, err := store.GetLastEvents(map[string]any{"execution_id": "legacy-exec"}, 10, 0, "desc", nil, nil)
 	require.NoError(t, err)
@@ -381,8 +381,8 @@ func TestSQLiteStoreSupportsExecutionFiltersForLegacyJSONRows(t *testing.T) {
 
 func TestSQLiteStoreBackfillIsIdempotentAcrossReopen(t *testing.T) {
 	dbPath := "test_audit_backfill_idempotent.db"
-	os.Remove(dbPath)
-	defer os.Remove(dbPath)
+	_ = os.Remove(dbPath)
+	defer func() { _ = os.Remove(dbPath) }()
 
 	legacyDB, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -463,7 +463,7 @@ func auditUpdateCount(t *testing.T, dbPath string) int {
 
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { require.NoError(t, db.Close()) }()
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM audit_event_updates`).Scan(&count)

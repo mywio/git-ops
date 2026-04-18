@@ -1,6 +1,10 @@
 # Build stage
+FROM node:20.19.0-bookworm-slim AS node
+
 FROM golang:1.24 AS builder
 WORKDIR /app
+
+COPY --from=node /usr/local/ /usr/local/
 
 COPY go.mod go.sum ./
 RUN go mod download

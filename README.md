@@ -2,6 +2,52 @@
 
 git-ops is a lightweight, "GitOps-lite" operator written in Go. It automatically discovers, syncs, and deploys Docker Compose stacks from your GitHub repositories based on Topics.
 
+## Quick Start
+
+### Docker (recommended)
+
+```yaml
+services:
+  git-ops:
+    image: ghcr.io/mywio/git-ops:latest
+    environment:
+      GITHUB_TOKEN: ghp_your_token
+      GITHUB_USERS: your-github-username
+      TOPIC_FILTER: homelab
+      TARGET_DIR: /stacks
+      CORE_HTTP_ADDR: 0.0.0.0:8080
+      PLUGINS_ALLOW: reconciler,ui,audit
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/stacks:/stacks
+    restart: unless-stopped
+```
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+Docker is also the recommended approach on Windows and macOS, where the native binary is not supported.
+
+| Plugin | Enable when | Extra config needed |
+| :--- | :--- | :--- |
+| `reconciler` | Always — core deploy engine | none beyond the three required vars |
+| `ui` | You want the web dashboard | `CORE_HTTP_ADDR` |
+| `audit` | You want an event history | none |
+| `image_refresh` | You want automatic image updates | none |
+| `env_forwarder` | You forward env vars to stacks | allowlist in config |
+| `file_forwarder` | You forward host files to stacks | file list in config |
+| `webhook_trigger` | You want to trigger reconcile via HTTP | optional `WEBHOOK_TOKEN` |
+| `notifier_discord` | You want Discord alerts | `DISCORD_WEBHOOK_URL` |
+| `notifier_pushover` | You want Pushover alerts | `NOTIFY_PUSHOVER_TOKEN` and `NOTIFY_PUSHOVER_USER` |
+| `notifier_webhook` | You want generic webhook alerts | `NOTIFY_WEBHOOK_URL` |
+| `google_secret_manager` | You use GCP secrets | Google ADC credentials and `GOOGLE_CLOUD_PROJECT` |
+| `mcp` | You use AI tooling | `MCP_API_KEY` |
+
+Add plugins to `PLUGINS_ALLOW` one at a time as you need them.
+
 ## Features
 - **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
 - **GitOps Lite**: Syncs `docker-compose.yml` from GitHub based on Topics.
@@ -9,11 +55,15 @@ git-ops is a lightweight, "GitOps-lite" operator written in Go. It automatically
 
 ## Installation
 
-### Prerequisites
+### Build from source
+
+Building from source requires Linux, Go 1.24+, and for the UI plugin Node.js 20.19+.
+
+#### Prerequisites
 - Go 1.24+
 - Docker & Docker Compose
 
-### Build
+#### Build
 ```bash
 # Build the core binary
 make build
@@ -23,6 +73,9 @@ make plugins
 ```
 
 The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
+
+Prebuilt binaries are also published as `git-ops-linux-amd64.tar.gz` release assets.
+The official container image is published as `ghcr.io/mywio/git-ops:latest`.
 
 ## Configuration (Env Vars)
 
@@ -36,6 +89,7 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
 | `DRY_RUN` | Log only, no changes | No | `false` |
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
+| `PLUGINS_ALLOW` | Comma-separated plugin `.so` base names to load | No | `reconciler,ui,discord` |
 | `CORE_HTTP_ADDR` | Core HTTP bind address for APIs/UI | No | `127.0.0.1:8080` |
 | `SECRETS_DIR` | Path to local secrets directory | No | `/etc/git-ops/secrets` |
 

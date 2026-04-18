@@ -254,9 +254,26 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 		return entries[i].Name() < entries[j].Name()
 	})
 
+	allowlist := m.pluginAllowlist()
+	allowset := make(map[string]struct{}, len(allowlist))
+	if len(allowlist) > 0 {
+		for _, name := range allowlist {
+			allowset[name] = struct{}{}
+		}
+		m.logger.Info("Plugin allowlist active", "allowed", allowlist)
+	}
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".so") {
 			continue
+		}
+
+		name := strings.TrimSuffix(entry.Name(), ".so")
+		if len(allowset) > 0 {
+			if _, ok := allowset[name]; !ok {
+				m.logger.Info("Skipping plugin (not in allowlist)", "plugin", name, "allowlist", allowlist)
+				continue
+			}
 		}
 
 		path := filepath.Join(dir, entry.Name())
@@ -284,6 +301,49 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 		m.logger.Info("Plugin loaded successfully", "name", plug.Name())
 	}
 	return nil
+}
+
+func (m *ModuleManager) pluginAllowlist() []string {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+
+	coreCfg, ok := m.config["core"]
+	if !ok {
+		return nil
+	}
+
+	raw, ok := coreCfg["plugins"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return nonEmptyStrings(strings.Split(v, ","))
+	case []string:
+		return nonEmptyStrings(v)
+	case []any:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+		return nonEmptyStrings(values)
+	default:
+		return nil
+	}
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func resolvePluginSymbol(sym any) (Plugin, bool) {

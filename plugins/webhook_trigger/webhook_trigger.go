@@ -75,10 +75,12 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 	}
 
 	if registry != nil {
-		registry.RegisterEventType(core.EventTypeDesc{
+		if err := registry.RegisterEventType(core.EventTypeDesc{
 			Name:        "webhook_received",
 			Description: "Raw webhook received (before processing)",
-		})
+		}); err != nil {
+			return fmt.Errorf("register event type webhook_received: %w", err)
+		}
 		p.mux = registry.GetMuxServer()
 	} else {
 		p.mux = http.NewServeMux()
@@ -145,7 +147,9 @@ func (p *WebhookTriggerPlugin) handleReconcile(w http.ResponseWriter, r *http.Re
 	if limited, retryAfter := p.checkRateLimit(); limited {
 		w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter.Seconds()))
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprintln(w, `{"status":"rate_limited","message":"Reconciliation trigger rate-limited"}`)
+		if _, err := fmt.Fprintln(w, `{"status":"rate_limited","message":"Reconciliation trigger rate-limited"}`); err != nil {
+			p.logger.Debug("failed to write rate-limited response", "error", err)
+		}
 		return
 	}
 
@@ -174,7 +178,9 @@ func (p *WebhookTriggerPlugin) handleReconcile(w http.ResponseWriter, r *http.Re
 
 	p.logger.Info("Reconciliation triggered successfully via webhook")
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintln(w, `{"status": "accepted", "message": "Reconciliation triggered"}`)
+	if _, err := fmt.Fprintln(w, `{"status": "accepted", "message": "Reconciliation triggered"}`); err != nil {
+		p.logger.Debug("failed to write accepted response", "error", err)
+	}
 }
 
 func (p *WebhookTriggerPlugin) checkRateLimit() (bool, time.Duration) {
@@ -210,12 +216,16 @@ type webhookTriggerConfigView struct {
 }
 
 func (p *WebhookTriggerPlugin) Config() any {
+	rateLimit := ""
+	if p.rateLimit > 0 {
+		rateLimit = p.rateLimit.String()
+	}
 	return webhookTriggerConfigView{
 		Port:      p.port,
 		Token:     core.NewSecret(p.token),
 		Secured:   p.token != "",
 		Enabled:   p.port != "",
-		RateLimit: p.rateLimit.String(),
+		RateLimit: rateLimit,
 		Throttled: p.rateLimit > 0,
 	}
 }
@@ -239,5 +249,7 @@ func main() {
 	logger.Info("Webhook trigger running (press Ctrl+C to stop)")
 	<-ctx.Done()
 
-	p.Stop(ctx)
+	if err := p.Stop(ctx); err != nil {
+		logger.Error("Stop failed", "error", err)
+	}
 }

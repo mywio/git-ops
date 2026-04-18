@@ -11,10 +11,18 @@ import {
 
 /* --- Types --- */
 type Deployment = {
+    id?: string;
+    kind?: string;
+    source?: string;
+    managed?: boolean;
+    display_name?: string;
     owner: string;
     repo: string;
     path: string;
     status: string;
+    container?: string;
+    image?: string;
+    docker_status?: string;
     execution_status?: string;
     execution_stage?: string;
     last_error?: string;
@@ -54,6 +62,19 @@ function formatExecutionHistory(history?: ExecutionHistoryEntry[]) {
             return details.join(' | ');
         })
         .join('\n');
+}
+
+function deploymentLabel(dep: Deployment) {
+    if (dep.display_name) {
+        return dep.display_name;
+    }
+    if (dep.owner && dep.repo) {
+        return `${dep.owner}/${dep.repo}`;
+    }
+    if (dep.container) {
+        return dep.container;
+    }
+    return dep.repo || 'unknown';
 }
 
 /* --- App Component --- */
@@ -105,7 +126,15 @@ function App() {
             }
             setLogs([]);
 
-            const sse = new EventSource(`/api/ui/logs?owner=${selectedLogStack.owner}&repo=${selectedLogStack.repo}&lines=100`);
+            const params = new URLSearchParams({ lines: '100' });
+            if (selectedLogStack.kind === 'container' && selectedLogStack.container) {
+                params.set('container', selectedLogStack.container);
+            } else {
+                params.set('owner', selectedLogStack.owner);
+                params.set('repo', selectedLogStack.repo);
+            }
+
+            const sse = new EventSource(`/api/ui/logs?${params.toString()}`);
             evtSource.current = sse;
 
             sse.onmessage = (event) => {
@@ -205,7 +234,7 @@ function App() {
                                     </thead>
                                     <tbody>
                                         {deployments.map(dep => (
-                                            <tr key={`${dep.owner}-${dep.repo}`}>
+                                            <tr key={dep.id || `${dep.owner}-${dep.repo}`}>
                                                 <td>
                                                     <span className={`status-badge ${dep.status}`}>
                                                         {dep.status === 'running' ? <PlayCircle size={14} /> : <Activity size={14} />}
@@ -235,8 +264,13 @@ function App() {
                                                         <span className="text-muted">n/a</span>
                                                     )}
                                                 </td>
-                                                <td>{dep.owner}</td>
-                                                <td><strong>{dep.repo}</strong></td>
+                                                <td>{dep.owner || <span className="text-muted">docker</span>}</td>
+                                                <td>
+                                                    <strong>{deploymentLabel(dep)}</strong>
+                                                    {dep.managed === false ? (
+                                                        <div className="status-detail text-muted">{dep.image || 'unmanaged container'}</div>
+                                                    ) : null}
+                                                </td>
                                                 <td className="error-cell">
                                                     {dep.last_error ? dep.last_error : <span className="text-muted">none</span>}
                                                 </td>
@@ -257,11 +291,11 @@ function App() {
                                 <div className="stack-list">
                                     {deployments.map(dep => (
                                         <button
-                                            key={`${dep.owner}-${dep.repo}`}
-                                            className={`stack-select-btn ${selectedLogStack?.repo === dep.repo ? 'active' : ''}`}
+                                            key={dep.id || `${dep.owner}-${dep.repo}`}
+                                            className={`stack-select-btn ${selectedLogStack?.id === dep.id ? 'active' : ''}`}
                                             onClick={() => setSelectedLogStack(dep)}
                                         >
-                                            {dep.repo}
+                                            {deploymentLabel(dep)}
                                         </button>
                                     ))}
                                 </div>

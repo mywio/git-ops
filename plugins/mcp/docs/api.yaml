@@ -1,0 +1,331 @@
+openapi: 3.0.3
+info:
+  title: git-ops HTTP API
+  version: "1.0"
+  description: |
+    Machine-readable description of the stable HTTP endpoints exposed by git-ops.
+
+    This spec covers:
+    - core plugin metadata endpoints
+    - UI helper endpoints
+    - webhook-trigger reconciliation endpoint
+
+    It does not document internal plugin Execute actions because those are not
+    exposed as direct HTTP routes.
+servers:
+  - url: http://localhost:8080
+    description: Example local server
+paths:
+  /api/plugins:
+    get:
+      summary: List loaded plugins
+      description: Returns all registered plugins with metadata and optional config.
+      parameters:
+        - in: query
+          name: include_config
+          schema:
+            type: boolean
+          required: false
+          description: Include UI-safe plugin config values when true.
+      responses:
+        "200":
+          description: Plugin list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginInfo"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/plugins/{name}:
+    get:
+      summary: Get a single plugin
+      description: Returns one plugin with config included.
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+          description: Registered plugin name
+      responses:
+        "200":
+          description: Plugin details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInfo"
+        "400":
+          description: Missing plugin name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Plugin not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/ui/deployments:
+    get:
+      summary: List managed stacks
+      description: |
+        Returns locally managed stacks aggregated from deployer plugins, including
+        runtime status and deployment execution metadata when available.
+      responses:
+        "200":
+          description: Deployment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Deployment"
+        "405":
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/ui/system/info:
+    get:
+      summary: Get system information
+      description: Returns system information aggregated from plugins with system capability.
+      responses:
+        "200":
+          description: System information by plugin name
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "405":
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/ui/logs:
+    get:
+      summary: Stream stack logs
+      description: |
+        Streams logs for a selected stack. Most successful responses use
+        `text/event-stream`, but some plugins may fall back to a JSON payload
+        containing a static `logs` string if streaming is unavailable.
+      parameters:
+        - in: query
+          name: owner
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: repo
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: lines
+          required: false
+          schema:
+            type: string
+          description: Number of lines to tail before following. Defaults to "100".
+      responses:
+        "200":
+          description: SSE stream or fallback log payload
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                stream:
+                  summary: SSE log stream
+                  value: |
+                    data: service started
+
+                    data: health check passed
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: string
+        "400":
+          description: Missing required query params
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: No deployer plugins available
+          content:
+            text/plain:
+              schema:
+                type: string
+        "500":
+          description: Stream setup or plugin error
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /reconcile:
+    post:
+      summary: Trigger reconciliation
+      description: |
+        Triggers a full reconciliation through the webhook trigger plugin.
+        If the webhook trigger is configured with a token, callers must provide
+        `Authorization: Bearer <token>`.
+      parameters:
+        - in: header
+          name: Authorization
+          required: false
+          schema:
+            type: string
+          description: Optional bearer token when webhook security is enabled.
+      responses:
+        "202":
+          description: Reconciliation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookAccepted"
+        "401":
+          description: Unauthorized
+          content:
+            text/plain:
+              schema:
+                type: string
+        "405":
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    PluginInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          example: healthy
+        version:
+          type: string
+          example: dev
+        config:
+          description: Plugin-specific UI-safe config payload.
+          nullable: true
+      required:
+        - name
+
+    Deployment:
+      type: object
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+        path:
+          type: string
+        status:
+          type: string
+          description: Docker/compose runtime state
+          enum: [running, partial, stopped, unknown]
+        execution_id:
+          type: string
+        execution_status:
+          type: string
+          description: Deployment pipeline execution state
+          enum: [requested, running, succeeded, failed]
+        execution_stage:
+          type: string
+        last_error:
+          type: string
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionHistoryEntry"
+      required:
+        - owner
+        - repo
+        - path
+        - status
+
+    ExecutionHistoryEntry:
+      type: object
+      properties:
+        ExecutionID:
+          type: string
+        Owner:
+          type: string
+        Repo:
+          type: string
+        FullName:
+          type: string
+        Status:
+          type: string
+        Stage:
+          type: string
+        LastError:
+          type: string
+        NodeID:
+          type: string
+        Trigger:
+          type: string
+        RequestedAt:
+          type: string
+          format: date-time
+        StartedAt:
+          type: string
+          format: date-time
+        UpdatedAt:
+          type: string
+          format: date-time
+        Active:
+          type: boolean
+
+    WebhookAccepted:
+      type: object
+      properties:
+        status:
+          type: string
+          example: accepted
+        message:
+          type: string
+          example: Reconciliation triggered
+      required:
+        - status
+        - message
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

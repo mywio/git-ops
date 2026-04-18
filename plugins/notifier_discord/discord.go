@@ -185,7 +185,7 @@ func (n *DiscordNotifier) send(ctx context.Context, event core.InternalEvent) er
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("discord webhook status %d", resp.StatusCode)

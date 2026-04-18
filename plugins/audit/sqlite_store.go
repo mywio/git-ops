@@ -110,7 +110,7 @@ func (s *sqliteStore) auditEventColumns() (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns := make(map[string]struct{})
 	for rows.Next() {
@@ -148,7 +148,7 @@ func (s *sqliteStore) backfillExecutionColumns() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type legacyAuditRow struct {
 		id           int64
@@ -320,7 +320,7 @@ func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, or
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []core.InternalEvent
 	for rows.Next() {
