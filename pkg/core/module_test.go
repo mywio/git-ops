@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -232,4 +233,18 @@ func assertLogFieldValue(t *testing.T, data []byte, key string, value any) {
 func writeFakePluginFile(t *testing.T, dir, name string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".so"), []byte("not a plugin"), 0o644))
+}
+
+func TestPluginFromValueSupportsPointerToPluginPointer(t *testing.T) {
+	plug := &mockPlugin{
+		MockModule:   MockModule{name: "pointer-plugin"},
+		capabilities: []Capability{CapabilityAPI},
+		status:       StatusHealthy,
+	}
+	exported := plug
+
+	resolved, ok := pluginFromValue(reflect.ValueOf(&exported))
+	require.True(t, ok)
+	require.NotNil(t, resolved)
+	assert.Equal(t, "pointer-plugin", resolved.Name())
 }

@@ -402,6 +402,11 @@ func pluginFromValue(val reflect.Value) (Plugin, bool) {
 		if val.IsNil() {
 			return nil, false
 		}
+		if val.CanInterface() {
+			if plug, ok := val.Interface().(Plugin); ok {
+				return plug, true
+			}
+		}
 		val = val.Elem()
 	}
 	if !val.IsValid() || !val.CanInterface() {

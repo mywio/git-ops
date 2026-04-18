@@ -2163,7 +2163,7 @@ func isMissingHookDirectoryError(err error) bool {
 }
 
 func (r *Reconciler) writeRepoHookScript(ctx context.Context, owner, repo, stage, hooksDir string, fileMeta *github.RepositoryContent) error {
-	decoded, err := r.fetchRepoHookContent(ctx, owner, repo, fileMeta)
+	fileContent, err := r.fetchRepoHookFile(ctx, owner, repo, fileMeta)
 	if err != nil {
 		r.logger.Error("Failed to fetch hook content", "file", fileMeta.GetName(), "error", err)
 		// Pre-hooks affect deploy correctness and must be present before execution.
@@ -2173,15 +2173,20 @@ func (r *Reconciler) writeRepoHookScript(ctx context.Context, owner, repo, stage
 		}
 		return nil
 	}
+	decoded, err := fileContent.GetContent()
+	if err != nil {
+		r.logger.Error("Failed to decode hook content", "file", fileMeta.GetName(), "error", err)
+		return nil
+	}
 
 	localScriptPath := filepath.Join(hooksDir, fileMeta.GetName())
 	return os.WriteFile(localScriptPath, []byte(decoded), 0755)
 }
 
-func (r *Reconciler) fetchRepoHookContent(ctx context.Context, owner, repo string, fileMeta *github.RepositoryContent) (string, error) {
+func (r *Reconciler) fetchRepoHookFile(ctx context.Context, owner, repo string, fileMeta *github.RepositoryContent) (*github.RepositoryContent, error) {
 	fileContent, _, _, err := r.client.Repositories.GetContents(ctx, owner, repo, fileMeta.GetPath(), nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return fileContent.GetContent()
+	return fileContent, nil
 }
