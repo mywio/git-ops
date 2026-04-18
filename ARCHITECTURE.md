@@ -1,5 +1,10 @@
 # Architecture
 
+For parent-level system intent, workspace rationale, and higher-level
+architectural tradeoffs, see
+[`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md). This document focuses on
+the internal runtime architecture of the `git-ops/` subrepository itself.
+
 ## Overview
 
 `git-ops` is a single-process Go runtime that loads plugins from `.so` files and
