@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -37,4 +39,68 @@ func TestUIPlugin(t *testing.T) {
 
 	err = Plugin.Stop(ctx)
 	assert.NoError(t, err)
+}
+
+func TestUIPluginRequiresDefaultAuthHeader(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx := context.Background()
+	mgr := core.NewModuleManager(logger)
+
+	plugin := &UIPlugin{}
+	err := plugin.Init(ctx, logger, mgr)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ui/system/info", nil)
+	rr := httptest.NewRecorder()
+
+	mgr.GetMuxServer().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "missing authenticated user header")
+}
+
+func TestUIPluginAcceptsCustomAuthHeader(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx := context.Background()
+	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{
+		"ui": {
+			"auth_header": "X-Forwarded-User",
+		},
+	})
+
+	plugin := &UIPlugin{}
+	err := plugin.Init(ctx, logger, mgr)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/system", nil)
+	req.Header.Set("X-Forwarded-User", "alice")
+	rr := httptest.NewRecorder()
+
+	mgr.GetMuxServer().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "<!doctype html")
+}
+
+func TestUIPluginCanDisableAuth(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx := context.Background()
+	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{
+		"ui": {
+			"disable_auth": true,
+		},
+	})
+
+	plugin := &UIPlugin{}
+	err := plugin.Init(ctx, logger, mgr)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ui/system/info", nil)
+	rr := httptest.NewRecorder()
+
+	mgr.GetMuxServer().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
 }

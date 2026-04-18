@@ -23,12 +23,12 @@ func (p *UIPlugin) registerRoutes() {
 	}
 
 	// API Routes (prefix with /api/ui to avoid core conflicts)
-	p.mux.HandleFunc("/api/ui/deployments", p.handleDeployments)
-	p.mux.HandleFunc("/api/ui/logs", p.handleLogs)
-	p.mux.HandleFunc("/api/ui/system/info", p.handleSystemInfo)
-	p.mux.HandleFunc("/", p.handleRootRedirect)
-	p.mux.HandleFunc("/ui", p.handleUIRootRedirect)
-	p.mux.HandleFunc("/ui/", p.handleFrontend)
+	p.mux.HandleFunc("/api/ui/deployments", p.requireAuth(p.handleDeployments))
+	p.mux.HandleFunc("/api/ui/logs", p.requireAuth(p.handleLogs))
+	p.mux.HandleFunc("/api/ui/system/info", p.requireAuth(p.handleSystemInfo))
+	p.mux.HandleFunc("/", p.requireAuth(p.handleRootRedirect))
+	p.mux.HandleFunc("/ui", p.requireAuth(p.handleUIRootRedirect))
+	p.mux.HandleFunc("/ui/", p.requireAuth(p.handleFrontend))
 }
 
 func (p *UIPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +140,27 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 			slog.Default().Error("failed to encode UI JSON response", "error", err)
 		}
 	}
+}
+
+func (p *UIPlugin) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if p.cfg.DisableAuth {
+			next(w, r)
+			return
+		}
+		if p.authenticatedUser(r) == "" {
+			http.Error(w, "missing authenticated user header", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (p *UIPlugin) authenticatedUser(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get(p.cfg.AuthHeader))
 }
 
 func (p *UIPlugin) handleRootRedirect(w http.ResponseWriter, r *http.Request) {
