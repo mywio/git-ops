@@ -2,6 +2,61 @@
 
 git-ops is a lightweight, "GitOps-lite" operator written in Go. It automatically discovers, syncs, and deploys Docker Compose stacks from your GitHub repositories based on Topics.
 
+## Quick Start
+
+### Path A: Docker (recommended)
+
+```yaml
+services:
+  git-ops:
+    image: ghcr.io/mywio/git-ops:latest
+    environment:
+      GITHUB_TOKEN: ghp_your_token
+      GITHUB_USERS: your-github-username
+      TOPIC_FILTER: homelab
+      TARGET_DIR: /stacks
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/stacks:/stacks
+    restart: unless-stopped
+```
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+Docker is also the recommended path on Windows and macOS. `git-ops` and its
+plugins are Linux-only binaries, but Docker Desktop runs the container inside a
+Linux VM, so the official image works normally there.
+
+### Windows and macOS
+
+Use the Docker path above.
+
+Platform notes:
+
+- Windows: Docker Desktop is the supported path. The container runs on Linux
+  inside Docker Desktop, which satisfies the Go plugin requirement. The Docker
+  socket mount still uses `/var/run/docker.sock` inside the container.
+- macOS: Docker Desktop is also the supported path. The native binary release
+  is not supported.
+- For `TARGET_DIR`, prefer a Docker-managed volume or a Linux/WSL-backed path
+  instead of a translated host filesystem path when possible.
+
+### Path B: Binary
+
+```bash
+curl -sSL https://raw.githubusercontent.com/mywio/git-ops/master/install.sh | sh
+export GITHUB_TOKEN=ghp_your_token
+export GITHUB_USERS=your-github-username
+export TOPIC_FILTER=homelab
+git-ops
+```
+
+See the [full configuration reference](#configuration-env-vars) for all options.
+
 ## Features
 - **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
 - **GitOps Lite**: Syncs `docker-compose.yml` from GitHub based on Topics.
@@ -23,6 +78,9 @@ make plugins
 ```
 
 The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
+
+Prebuilt binaries are also published as `git-ops-linux-amd64.tar.gz` release assets.
+The official container image is published as `ghcr.io/mywio/git-ops:latest`.
 
 ## Configuration (Env Vars)
 
