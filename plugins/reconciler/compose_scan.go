@@ -27,18 +27,11 @@ func scanComposeEnvPersistenceRisks(composeContent string, composeEnv []string) 
 		return nil, nil
 	}
 
-	var root yaml.Node
-	if err := yaml.Unmarshal([]byte(composeContent), &root); err != nil {
-		return nil, fmt.Errorf("parse compose yaml: %w", err)
+	servicesNode, err := parseComposeServicesNode(composeContent)
+	if err != nil {
+		return nil, err
 	}
-
-	doc := firstContentNode(&root)
-	if doc == nil || doc.Kind != yaml.MappingNode {
-		return nil, nil
-	}
-
-	servicesNode := mappingValue(doc, "services")
-	if servicesNode == nil || servicesNode.Kind != yaml.MappingNode {
+	if servicesNode == nil {
 		return nil, nil
 	}
 
@@ -56,26 +49,51 @@ func scanComposeEnvPersistenceRisks(composeContent string, composeEnv []string) 
 		}
 		safeRefs := collectServiceRuntimeEnvRefs(serviceNode)
 
-		for _, key := range forwardedKeys {
-			if _, referenced := allRefs[key]; !referenced {
-				continue
-			}
-			if _, safe := safeRefs[key]; safe {
-				continue
-			}
-			riskKey := serviceName + "\x00" + key
-			riskSet[riskKey] = composeEnvPersistenceRisk{
-				Service: serviceName,
-				Key:     key,
-				Reason:  "referenced in compose but not mapped into the service runtime environment",
-			}
-		}
+		addComposeEnvPersistenceRisks(riskSet, serviceName, forwardedKeys, allRefs, safeRefs)
 	}
 
-	if len(riskSet) == 0 {
+	return sortedComposeEnvPersistenceRisks(riskSet), nil
+}
+
+func parseComposeServicesNode(composeContent string) (*yaml.Node, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(composeContent), &root); err != nil {
+		return nil, fmt.Errorf("parse compose yaml: %w", err)
+	}
+
+	doc := firstContentNode(&root)
+	if doc == nil || doc.Kind != yaml.MappingNode {
 		return nil, nil
 	}
 
+	servicesNode := mappingValue(doc, "services")
+	if servicesNode == nil || servicesNode.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	return servicesNode, nil
+}
+
+func addComposeEnvPersistenceRisks(riskSet map[string]composeEnvPersistenceRisk, serviceName string, forwardedKeys []string, allRefs, safeRefs map[string]struct{}) {
+	for _, key := range forwardedKeys {
+		if _, referenced := allRefs[key]; !referenced {
+			continue
+		}
+		if _, safe := safeRefs[key]; safe {
+			continue
+		}
+		riskKey := serviceName + "\x00" + key
+		riskSet[riskKey] = composeEnvPersistenceRisk{
+			Service: serviceName,
+			Key:     key,
+			Reason:  "referenced in compose but not mapped into the service runtime environment",
+		}
+	}
+}
+
+func sortedComposeEnvPersistenceRisks(riskSet map[string]composeEnvPersistenceRisk) []composeEnvPersistenceRisk {
+	if len(riskSet) == 0 {
+		return nil
+	}
 	risks := make([]composeEnvPersistenceRisk, 0, len(riskSet))
 	for _, risk := range riskSet {
 		risks = append(risks, risk)
@@ -86,7 +104,7 @@ func scanComposeEnvPersistenceRisks(composeContent string, composeEnv []string) 
 		}
 		return risks[i].Service < risks[j].Service
 	})
-	return risks, nil
+	return risks
 }
 
 func forwardedComposeEnvKeys(composeEnv []string) []string {
@@ -139,41 +157,53 @@ func collectServiceRuntimeEnvRefs(serviceNode *yaml.Node) map[string]struct{} {
 
 	switch envNode.Kind {
 	case yaml.MappingNode:
-		for i := 0; i+1 < len(envNode.Content); i += 2 {
-			envKey := strings.TrimSpace(envNode.Content[i].Value)
-			envValue := envNode.Content[i+1]
-			if envKey == "" {
-				continue
-			}
-			if envValue == nil || envValue.Tag == "!!null" || strings.TrimSpace(envValue.Value) == "" {
-				refs[envKey] = struct{}{}
-			}
-			collectScalarEnvRefs(envValue, refs)
-		}
+		collectMappingRuntimeEnvRefs(envNode, refs)
 	case yaml.SequenceNode:
-		for _, item := range envNode.Content {
-			entry := strings.TrimSpace(item.Value)
-			if entry == "" {
-				continue
-			}
-			if !strings.Contains(entry, "=") {
-				refs[entry] = struct{}{}
-				continue
-			}
-			_, rhs, _ := strings.Cut(entry, "=")
-			for _, match := range composeEnvReferencePattern.FindAllStringSubmatch(rhs, -1) {
-				key := strings.TrimSpace(match[1])
-				if key == "" {
-					key = strings.TrimSpace(match[2])
-				}
-				if key != "" {
-					refs[key] = struct{}{}
-				}
-			}
-		}
+		collectSequenceRuntimeEnvRefs(envNode, refs)
 	}
 
 	return refs
+}
+
+func collectMappingRuntimeEnvRefs(envNode *yaml.Node, refs map[string]struct{}) {
+	for i := 0; i+1 < len(envNode.Content); i += 2 {
+		envKey := strings.TrimSpace(envNode.Content[i].Value)
+		envValue := envNode.Content[i+1]
+		if envKey == "" {
+			continue
+		}
+		if envValue == nil || envValue.Tag == "!!null" || strings.TrimSpace(envValue.Value) == "" {
+			refs[envKey] = struct{}{}
+		}
+		collectScalarEnvRefs(envValue, refs)
+	}
+}
+
+func collectSequenceRuntimeEnvRefs(envNode *yaml.Node, refs map[string]struct{}) {
+	for _, item := range envNode.Content {
+		entry := strings.TrimSpace(item.Value)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "=") {
+			refs[entry] = struct{}{}
+			continue
+		}
+		_, rhs, _ := strings.Cut(entry, "=")
+		collectEnvRefMatches(rhs, refs)
+	}
+}
+
+func collectEnvRefMatches(value string, refs map[string]struct{}) {
+	for _, match := range composeEnvReferencePattern.FindAllStringSubmatch(value, -1) {
+		key := strings.TrimSpace(match[1])
+		if key == "" {
+			key = strings.TrimSpace(match[2])
+		}
+		if key != "" {
+			refs[key] = struct{}{}
+		}
+	}
 }
 
 func firstContentNode(node *yaml.Node) *yaml.Node {
@@ -239,9 +269,9 @@ func (r *Reconciler) warnOnComposeEnvPersistenceRisks(ctx context.Context, repo 
 	message := fmt.Sprintf("Compose env persistence risk detected for %s: %d finding(s) across %d service(s)", fullName, len(risks), len(services))
 	logger.Warn(message, "services", services, "keys", keys)
 	r.publish(ctx, core.InternalEvent{
-		Type:   "notify_compose_env_persistence_risk",
-		Source: "reconciler",
-		Repo:   *repo.Name,
+		Type:    "notify_compose_env_persistence_risk",
+		Source:  "reconciler",
+		Repo:    *repo.Name,
 		Message: message,
 		Details: map[string]any{
 			"owner":      *repo.Owner.Login,

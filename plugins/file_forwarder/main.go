@@ -157,45 +157,70 @@ func (p *FileForwarderPlugin) collectRuntimeFiles() ([]core.RuntimeFile, fileFor
 
 	out := make([]core.RuntimeFile, 0, len(p.files))
 	for _, spec := range p.files {
-		content, err := os.ReadFile(spec.Path)
+		runtimeFile, err := p.runtimeFileFromSpec(spec, &stats)
 		if err != nil {
-			if isRequired(spec.Required) {
-				stats.LastUpdated = time.Now().UTC()
-				return nil, stats, fmt.Errorf("failed reading required file %s: %w", spec.Path, err)
-			}
-			stats.MissingFiles = append(stats.MissingFiles, spec.Path)
+			stats.LastUpdated = time.Now().UTC()
+			return nil, stats, err
+		}
+		if runtimeFile == nil {
 			continue
 		}
-
-		mode := uint32(0600)
-		if spec.Mode != "" {
-			parsed, err := parseFileMode(spec.Mode)
-			if err != nil {
-				return nil, stats, fmt.Errorf("invalid mode for %s: %w", spec.Path, err)
-			}
-			mode = parsed
-		}
-
-		filename := spec.Filename
-		if filename == "" {
-			filename = filepath.Base(spec.Path)
-		}
-		filename = filepath.Base(filename)
-		if filename == "" || filename == "." || filename == string(filepath.Separator) {
-			return nil, stats, fmt.Errorf("invalid filename for env %s", spec.Env)
-		}
-
-		out = append(out, core.RuntimeFile{
-			EnvKey:   spec.Env,
-			Filename: filename,
-			Content:  content,
-			Mode:     mode,
-		})
+		out = append(out, *runtimeFile)
 	}
 
 	stats.ForwardedFiles = len(out)
 	stats.LastUpdated = time.Now().UTC()
 	return out, stats, nil
+}
+
+func (p *FileForwarderPlugin) runtimeFileFromSpec(spec forwardFileSpec, stats *fileForwarderStats) (*core.RuntimeFile, error) {
+	content, err := os.ReadFile(spec.Path)
+	if err != nil {
+		if isRequired(spec.Required) {
+			return nil, fmt.Errorf("failed reading required file %s: %w", spec.Path, err)
+		}
+		stats.MissingFiles = append(stats.MissingFiles, spec.Path)
+		return nil, nil
+	}
+
+	mode, err := resolveForwardedFileMode(spec)
+	if err != nil {
+		return nil, err
+	}
+	filename, err := resolveForwardedFilename(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	return &core.RuntimeFile{
+		EnvKey:   spec.Env,
+		Filename: filename,
+		Content:  content,
+		Mode:     mode,
+	}, nil
+}
+
+func resolveForwardedFileMode(spec forwardFileSpec) (uint32, error) {
+	if spec.Mode == "" {
+		return uint32(0600), nil
+	}
+	parsed, err := parseFileMode(spec.Mode)
+	if err != nil {
+		return 0, fmt.Errorf("invalid mode for %s: %w", spec.Path, err)
+	}
+	return parsed, nil
+}
+
+func resolveForwardedFilename(spec forwardFileSpec) (string, error) {
+	filename := spec.Filename
+	if filename == "" {
+		filename = filepath.Base(spec.Path)
+	}
+	filename = filepath.Base(filename)
+	if filename == "" || filename == "." || filename == string(filepath.Separator) {
+		return "", fmt.Errorf("invalid filename for env %s", spec.Env)
+	}
+	return filename, nil
 }
 
 func parseFileMode(raw string) (uint32, error) {

@@ -180,53 +180,68 @@ func (p *EnvForwarderPlugin) collectSecrets(ctx context.Context) (map[string]str
 	}
 
 	secrets := cloneStringMap(p.env)
-
-	for _, prefix := range p.prefixes {
-		stats.PrefixMatches[prefix] = 0
-		stats.PrefixForwarded[prefix] = 0
-	}
-	configuredKeys := make(map[string]struct{}, len(p.keys))
-	for _, key := range p.keys {
-		if key != "" {
-			configuredKeys[key] = struct{}{}
-		}
-	}
-
-	for _, key := range p.keys {
-		if key == "" {
-			continue
-		}
-		value, ok := secrets[key]
-		if !ok {
-			p.logger.Warn("Env var not set", "key", key)
-			stats.MissingKeys = append(stats.MissingKeys, key)
-			continue
-		}
-		secrets[key] = value
-		stats.ForwardedFromKeys++
-	}
-
-	if len(p.prefixes) > 0 {
-		for key := range secrets {
-			for _, prefix := range p.prefixes {
-				if prefix == "" {
-					continue
-				}
-				if strings.HasPrefix(key, prefix) {
-					stats.PrefixMatches[prefix]++
-					if _, exists := configuredKeys[key]; !exists {
-						stats.ForwardedFromPrefixes++
-						stats.PrefixForwarded[prefix]++
-					}
-					break
-				}
-			}
-		}
-	}
+	initializePrefixStats(&stats, p.prefixes)
+	configuredKeys := configuredKeySet(p.keys)
+	p.forwardConfiguredKeys(secrets, &stats)
+	p.forwardPrefixMatches(secrets, configuredKeys, &stats)
 
 	stats.ForwardedTotal = len(secrets)
 	stats.LastUpdated = time.Now().UTC()
 	return secrets, stats
+}
+
+func initializePrefixStats(stats *envForwarderStats, prefixes []string) {
+	for _, prefix := range prefixes {
+		stats.PrefixMatches[prefix] = 0
+		stats.PrefixForwarded[prefix] = 0
+	}
+}
+
+func configuredKeySet(keys []string) map[string]struct{} {
+	configuredKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key != "" {
+			configuredKeys[key] = struct{}{}
+		}
+	}
+	return configuredKeys
+}
+
+func (p *EnvForwarderPlugin) forwardConfiguredKeys(secrets map[string]string, stats *envForwarderStats) {
+	for _, key := range p.keys {
+		if key == "" {
+			continue
+		}
+		if _, ok := secrets[key]; !ok {
+			p.logger.Warn("Env var not set", "key", key)
+			stats.MissingKeys = append(stats.MissingKeys, key)
+			continue
+		}
+		stats.ForwardedFromKeys++
+	}
+}
+
+func (p *EnvForwarderPlugin) forwardPrefixMatches(secrets map[string]string, configuredKeys map[string]struct{}, stats *envForwarderStats) {
+	if len(p.prefixes) == 0 {
+		return
+	}
+	for key := range secrets {
+		p.recordPrefixMatch(key, configuredKeys, stats)
+	}
+}
+
+func (p *EnvForwarderPlugin) recordPrefixMatch(key string, configuredKeys map[string]struct{}, stats *envForwarderStats) {
+	for _, prefix := range p.prefixes {
+		if prefix == "" || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		stats.PrefixMatches[prefix]++
+		if _, exists := configuredKeys[key]; !exists {
+			stats.ForwardedFromPrefixes++
+			stats.PrefixForwarded[prefix]++
+		}
+		return
+	}
 }
 
 func (p *EnvForwarderPlugin) buildSnapshot() (map[string]string, error) {
