@@ -304,6 +304,8 @@ Important details:
 - the binary version is injected through `-ldflags`
 - UI build requires Node.js `20.19+`
 - plugin targets that span multiple source files use `*.go`
+- official release artifacts and the published container image target `linux/amd64`
+- plugins can be filtered at load time through `core.plugins` / `PLUGINS_ALLOW`
 
 CI currently builds, vets, lints, and tests the repository.
 
