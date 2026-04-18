@@ -46,23 +46,8 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 		p.now = time.Now
 	}
 
-	if registry != nil {
-		cfg := registry.GetConfig()
-		if section, ok := cfg["webhook_trigger"]; ok {
-			var wcfg webhookTriggerConfig
-			if err := core.DecodeConfigSection(section, &wcfg); err != nil {
-				p.logger.WarnContext(ctx, "Invalid webhook_trigger config", "error", err)
-			}
-			p.port = wcfg.Port
-			p.token = wcfg.Token
-			if wcfg.RateLimit != "" {
-				rateLimit, err := time.ParseDuration(wcfg.RateLimit)
-				if err != nil {
-					return fmt.Errorf("parse webhook_trigger rate_limit: %w", err)
-				}
-				p.rateLimit = rateLimit
-			}
-		}
+	if err := p.loadConfig(ctx, registry); err != nil {
+		return err
 	}
 	if p.port == "" {
 		p.port = "8082"
@@ -87,6 +72,35 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 	}
 	p.mux.HandleFunc("/reconcile", p.handleReconcile)
 
+	return nil
+}
+
+func (p *WebhookTriggerPlugin) loadConfig(ctx context.Context, registry core.PluginRegistry) error {
+	if registry == nil {
+		return nil
+	}
+
+	cfg := registry.GetConfig()
+	section, ok := cfg["webhook_trigger"]
+	if !ok {
+		return nil
+	}
+
+	var wcfg webhookTriggerConfig
+	if err := core.DecodeConfigSection(section, &wcfg); err != nil {
+		p.logger.WarnContext(ctx, "Invalid webhook_trigger config", "error", err)
+	}
+	p.port = wcfg.Port
+	p.token = wcfg.Token
+	if wcfg.RateLimit == "" {
+		return nil
+	}
+
+	rateLimit, err := time.ParseDuration(wcfg.RateLimit)
+	if err != nil {
+		return fmt.Errorf("parse webhook_trigger rate_limit: %w", err)
+	}
+	p.rateLimit = rateLimit
 	return nil
 }
 

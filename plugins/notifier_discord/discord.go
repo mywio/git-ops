@@ -48,23 +48,7 @@ func (n *DiscordNotifier) Name() string {
 
 func (n *DiscordNotifier) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	n.logger = logger
-	var subscribeProvided bool
-	var subscribePatterns []string
-	if registry != nil {
-		n.client = registry.GetHTTPClient()
-		cfg := registry.GetConfig()
-		if section, ok := cfg["discord"]; ok {
-			if _, okSub := section["subscribe"]; okSub {
-				subscribeProvided = true
-			}
-			var discordCfg discordConfig
-			if err := core.DecodeConfigSection(section, &discordCfg); err != nil {
-				n.logger.WarnContext(ctx, "Invalid discord config", "error", err)
-			}
-			n.webhookURL = discordCfg.WebhookURL
-			subscribePatterns = parseSubscribePatterns(section)
-		}
-	}
+	subscribeProvided, subscribePatterns := n.loadConfig(ctx, registry)
 	if n.client == nil {
 		n.client = http.DefaultClient
 	}
@@ -90,6 +74,31 @@ func (n *DiscordNotifier) Init(ctx context.Context, logger *slog.Logger, registr
 	}
 
 	return nil
+}
+
+func (n *DiscordNotifier) loadConfig(ctx context.Context, registry core.PluginRegistry) (bool, []string) {
+	subscribeProvided := false
+	subscribePatterns := []string(nil)
+	if registry == nil {
+		return false, nil
+	}
+
+	n.client = registry.GetHTTPClient()
+	cfg := registry.GetConfig()
+	section, ok := cfg["discord"]
+	if !ok {
+		return false, nil
+	}
+	if _, ok := section["subscribe"]; ok {
+		subscribeProvided = true
+	}
+	var discordCfg discordConfig
+	if err := core.DecodeConfigSection(section, &discordCfg); err != nil {
+		n.logger.WarnContext(ctx, "Invalid discord config", "error", err)
+	}
+	n.webhookURL = discordCfg.WebhookURL
+	subscribePatterns = parseSubscribePatterns(section)
+	return subscribeProvided, subscribePatterns
 }
 
 func (n *DiscordNotifier) Start(ctx context.Context) error {

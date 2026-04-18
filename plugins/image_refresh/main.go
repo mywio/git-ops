@@ -33,12 +33,12 @@ type imageRefreshConfig struct {
 }
 
 type ImageRefreshPlugin struct {
-	logger      *slog.Logger
-	registry    core.PluginRegistry
+	logger       *slog.Logger
+	registry     core.PluginRegistry
 	publishEvent func(context.Context, core.InternalEvent)
-	jobs        imageRefreshScheduler
-	enabled     bool
-	retryDelays []time.Duration
+	jobs         imageRefreshScheduler
+	enabled      bool
+	retryDelays  []time.Duration
 }
 
 var Plugin core.Plugin = &ImageRefreshPlugin{}
@@ -69,40 +69,16 @@ func (p *ImageRefreshPlugin) Init(ctx context.Context, logger *slog.Logger, regi
 		p.publishEvent = registry.Publish
 	}
 
-	cfg := imageRefreshConfig{
-		RetryDelaysMinutes: []float64{0, 1, 2, 4, 8},
+	cfg, err := p.loadConfig(registry)
+	if err != nil {
+		return err
 	}
-	if registry != nil {
-		if section, ok := registry.GetConfig()["image_refresh"]; ok {
-			if err := core.DecodeConfigSection(section, &cfg); err != nil {
-				return fmt.Errorf("decode image_refresh config: %w", err)
-			}
-		}
-	}
-
 	p.enabled = cfg.Enabled
 	p.retryDelays = retryDurations(cfg.RetryDelaysMinutes)
 	if len(p.retryDelays) == 0 {
 		p.retryDelays = retryDurations([]float64{0, 1, 2, 4, 8})
 	}
-	if p.jobs == nil {
-		p.jobs = newJobManager(jobManagerConfig{
-			Logger:  logger,
-			Context: ctx,
-			RunAttempt: func(runCtx context.Context, attempt refreshAttempt) attemptResult {
-				return p.runRefreshAttempt(runCtx, attempt)
-			},
-			OnSuperseded: func(req refreshJobRequest) {
-				p.publishLifecycleEvent(context.Background(), "image_refresh_superseded", req, 1, firstRetryDelay(req), "superseded by newer commit")
-			},
-			OnRetrying: func(attempt refreshAttempt) {
-				p.publishLifecycleEvent(context.Background(), "image_refresh_retrying", attempt.Request, attempt.Number, attempt.Delay, "retry scheduled")
-			},
-			OnExhausted: func(req refreshJobRequest) {
-				p.publishLifecycleEvent(context.Background(), "image_refresh_exhausted", req, len(req.RetryDelays), lastRetryDelay(req), "retry budget exhausted")
-			},
-		})
-	}
+	p.ensureJobManager(ctx, logger)
 
 	if registry != nil {
 		for _, desc := range imageRefreshEventTypes() {
@@ -113,6 +89,46 @@ func (p *ImageRefreshPlugin) Init(ctx context.Context, logger *slog.Logger, regi
 	}
 
 	return nil
+}
+
+func (p *ImageRefreshPlugin) loadConfig(registry core.PluginRegistry) (imageRefreshConfig, error) {
+	cfg := imageRefreshConfig{
+		RetryDelaysMinutes: []float64{0, 1, 2, 4, 8},
+	}
+	if registry == nil {
+		return cfg, nil
+	}
+	section, ok := registry.GetConfig()["image_refresh"]
+	if !ok {
+		return cfg, nil
+	}
+	if err := core.DecodeConfigSection(section, &cfg); err != nil {
+		return imageRefreshConfig{}, fmt.Errorf("decode image_refresh config: %w", err)
+	}
+	return cfg, nil
+}
+
+func (p *ImageRefreshPlugin) ensureJobManager(ctx context.Context, logger *slog.Logger) {
+	if p.jobs != nil {
+		return
+	}
+
+	p.jobs = newJobManager(jobManagerConfig{
+		Logger:  logger,
+		Context: ctx,
+		RunAttempt: func(runCtx context.Context, attempt refreshAttempt) attemptResult {
+			return p.runRefreshAttempt(runCtx, attempt)
+		},
+		OnSuperseded: func(req refreshJobRequest) {
+			p.publishLifecycleEvent(context.Background(), "image_refresh_superseded", req, 1, firstRetryDelay(req), "superseded by newer commit")
+		},
+		OnRetrying: func(attempt refreshAttempt) {
+			p.publishLifecycleEvent(context.Background(), "image_refresh_retrying", attempt.Request, attempt.Number, attempt.Delay, "retry scheduled")
+		},
+		OnExhausted: func(req refreshJobRequest) {
+			p.publishLifecycleEvent(context.Background(), "image_refresh_exhausted", req, len(req.RetryDelays), lastRetryDelay(req), "retry budget exhausted")
+		},
+	})
 }
 
 func (p *ImageRefreshPlugin) Start(ctx context.Context) error {
@@ -211,10 +227,10 @@ func (p *ImageRefreshPlugin) publishLifecycleEvent(ctx context.Context, eventTyp
 
 	if p.publishEvent != nil {
 		p.publishEvent(ctx, core.InternalEvent{
-		Type:      eventType,
-		Source:    p.Name(),
-		Timestamp: time.Now().UTC(),
-		Details:   details,
+			Type:      eventType,
+			Source:    p.Name(),
+			Timestamp: time.Now().UTC(),
+			Details:   details,
 		})
 	}
 }

@@ -31,23 +31,7 @@ func (p *WebhookPlugin) Name() string {
 
 func (p *WebhookPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
-	var subscribeProvided bool
-	var subscribePatterns []string
-	if registry != nil {
-		cfg := registry.GetConfig()
-		if section, ok := cfg["webhook"]; ok {
-			if _, ok := section["subscribe"]; ok {
-				subscribeProvided = true
-			}
-			var wcfg webhookConfig
-			if err := core.DecodeConfigSection(section, &wcfg); err != nil {
-				p.logger.Warn("Invalid webhook config", "error", err)
-			}
-			p.url = wcfg.URL
-			subscribePatterns = parseSubscribePatterns(section)
-		}
-		p.client = registry.GetHTTPClient()
-	}
+	subscribeProvided, subscribePatterns := p.loadConfig(ctx, registry)
 	if p.client == nil {
 		p.client = http.DefaultClient
 	}
@@ -72,6 +56,31 @@ func (p *WebhookPlugin) Init(ctx context.Context, logger *slog.Logger, registry 
 		}
 	}
 	return nil
+}
+
+func (p *WebhookPlugin) loadConfig(ctx context.Context, registry core.PluginRegistry) (bool, []string) {
+	subscribeProvided := false
+	subscribePatterns := []string(nil)
+	if registry == nil {
+		return false, nil
+	}
+
+	p.client = registry.GetHTTPClient()
+	cfg := registry.GetConfig()
+	section, ok := cfg["webhook"]
+	if !ok {
+		return false, nil
+	}
+	if _, ok := section["subscribe"]; ok {
+		subscribeProvided = true
+	}
+	var wcfg webhookConfig
+	if err := core.DecodeConfigSection(section, &wcfg); err != nil {
+		p.logger.WarnContext(ctx, "Invalid webhook config", "error", err)
+	}
+	p.url = wcfg.URL
+	subscribePatterns = parseSubscribePatterns(section)
+	return subscribeProvided, subscribePatterns
 }
 
 func (p *WebhookPlugin) Start(ctx context.Context) error {
