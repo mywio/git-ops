@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,22 +21,22 @@ import (
 
 type MockModule struct {
 	name        string
-	initCalled  bool
-	startCalled bool
-	stopCalled  bool
+	initCalled  atomic.Bool
+	startCalled atomic.Bool
+	stopCalled  atomic.Bool
 }
 
 func (m *MockModule) Name() string { return m.name }
 func (m *MockModule) Init(ctx context.Context, l *slog.Logger, r PluginRegistry) error {
-	m.initCalled = true
+	m.initCalled.Store(true)
 	return nil
 }
 func (m *MockModule) Start(ctx context.Context) error {
-	m.startCalled = true
+	m.startCalled.Store(true)
 	return nil
 }
 func (m *MockModule) Stop(ctx context.Context) error {
-	m.stopCalled = true
+	m.stopCalled.Store(true)
 	return nil
 }
 
@@ -67,19 +68,19 @@ func TestModuleManager(t *testing.T) {
 
 	err := mgr.Init(ctx)
 	assert.NoError(t, err)
-	assert.True(t, mock.initCalled)
+	assert.True(t, mock.initCalled.Load())
 
 	mgr.Start(ctx)
 	// Wait a bit for goroutine
 	time.Sleep(100 * time.Millisecond)
-	assert.True(t, mock.startCalled)
+	assert.True(t, mock.startCalled.Load())
 
 	mgr.Stop(ctx)
-	assert.True(t, mock.stopCalled)
+	assert.True(t, mock.stopCalled.Load())
 }
 
 func TestModuleManagerStartLogsActivePlugins(t *testing.T) {
-	var logBuffer bytes.Buffer
+	var logBuffer lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
 	mgr := NewModuleManager(logger)
 	plug := &mockPlugin{
@@ -111,6 +112,23 @@ func TestModuleManagerStartLogsActivePlugins(t *testing.T) {
 	}
 
 	assert.True(t, found, "expected active plugin log entry")
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]byte(nil), l.b.Bytes()...)
 }
 
 func TestModuleManagerBrokerIsInstanceScoped(t *testing.T) {
