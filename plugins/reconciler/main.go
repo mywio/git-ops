@@ -89,6 +89,16 @@ type stackHealthSnapshot struct {
 
 var remoteComposeFilenames = []string{"compose.yaml", "docker-compose.yml"}
 
+const (
+	dockerFormatFlag         = "--format"
+	dockerJSONFormat         = "json"
+	repoOwnerDescription     = "Repository owner"
+	repoNameDescription      = "Repository name"
+	repoFullNameDescription  = "Repository full name"
+	deployDirName            = ".deploy"
+	composeRemoveOrphansFlag = "--remove-orphans"
+)
+
 var Plugin core.Plugin = &Reconciler{
 	stopCh:       make(chan struct{}),
 	healthStopCh: make(chan struct{}),
@@ -96,7 +106,7 @@ var Plugin core.Plugin = &Reconciler{
 
 var removeAll = os.RemoveAll
 var listComposePSContainers = func(repoPath string) ([]composePSContainer, error) {
-	cmd := exec.Command("docker", "compose", "ps", "-a", "--format", "json")
+	cmd := exec.Command("docker", "compose", "ps", "-a", dockerFormatFlag, dockerJSONFormat)
 	cmd.Dir = repoPath
 
 	out, err := cmd.Output()
@@ -107,7 +117,7 @@ var listComposePSContainers = func(repoPath string) ([]composePSContainer, error
 	return parseComposePSOutput(out), nil
 }
 var listDockerContainers = func() ([]dockerPSContainer, error) {
-	cmd := exec.Command("docker", "ps", "--format", "json")
+	cmd := exec.Command("docker", "ps", dockerFormatFlag, dockerJSONFormat)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -278,8 +288,8 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Name:        "reconcile_stack",
 				Description: "Request reconciliation for a specific stack",
 				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: "Repository owner", Required: true},
-					"repo":       {Type: "string", Description: "Repository name", Required: true},
+					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
 					"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
 				},
 			},
@@ -303,9 +313,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Description: "Stack execution lifecycle update",
 				PayloadSpec: map[string]core.PayloadField{
 					"execution_id": {Type: "string", Description: "Execution identifier", Required: true},
-					"owner":        {Type: "string", Description: "Repository owner", Required: true},
-					"repo":         {Type: "string", Description: "Repository name", Required: true},
-					"full_name":    {Type: "string", Description: "Repository full name", Required: true},
+					"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+					"full_name":    {Type: "string", Description: repoFullNameDescription, Required: true},
 					"stage":        {Type: "string", Description: "Current execution stage", Required: true},
 					"status":       {Type: "string", Description: "Current execution status", Required: true},
 				},
@@ -314,9 +324,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Name:        "stack_commit_changed",
 				Description: "Stack commit advanced after successful reconciliation",
 				PayloadSpec: map[string]core.PayloadField{
-					"owner":           {Type: "string", Description: "Repository owner", Required: true},
-					"repo":            {Type: "string", Description: "Repository name", Required: true},
-					"full_name":       {Type: "string", Description: "Repository full name", Required: true},
+					"owner":           {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":            {Type: "string", Description: repoNameDescription, Required: true},
+					"full_name":       {Type: "string", Description: repoFullNameDescription, Required: true},
 					"stack_path":      {Type: "string", Description: "Absolute stack path", Required: true},
 					"old_commit":      {Type: "string", Description: "Previous reconciler-observed commit", Required: false},
 					"new_commit":      {Type: "string", Description: "New reconciler-observed commit", Required: true},
@@ -336,9 +346,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Name:        "notify_compose_env_persistence_risk",
 				Description: "Forwarded compose env is referenced outside the service runtime environment",
 				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: "Repository owner", Required: true},
-					"repo":       {Type: "string", Description: "Repository name", Required: true},
-					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
 					"services":   {Type: "array", Description: "Affected compose service names", Required: true},
 					"keys":       {Type: "array", Description: "Forwarded env keys involved in risky references", Required: true},
 					"risk_count": {Type: "int", Description: "Number of grouped risk findings", Required: true},
@@ -349,9 +359,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Name:        "stack_locked",
 				Description: "Stack deployment or prune was skipped because a lock file is present",
 				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: "Repository owner", Required: true},
-					"repo":       {Type: "string", Description: "Repository name", Required: true},
-					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
 					"stack_path": {Type: "string", Description: "Absolute stack path", Required: true},
 					"lock_file":  {Type: "string", Description: "Absolute lock file path", Required: true},
 				},
@@ -360,9 +370,9 @@ func (r *Reconciler) Init(ctx context.Context, logger *slog.Logger, registry cor
 				Name:        "stack_health",
 				Description: "Stack health changed based on docker compose ps state",
 				PayloadSpec: map[string]core.PayloadField{
-					"owner":      {Type: "string", Description: "Repository owner", Required: true},
-					"repo":       {Type: "string", Description: "Repository name", Required: true},
-					"full_name":  {Type: "string", Description: "Repository full name", Required: true},
+					"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
+					"repo":       {Type: "string", Description: repoNameDescription, Required: true},
+					"full_name":  {Type: "string", Description: repoFullNameDescription, Required: true},
 					"status":     {Type: "string", Description: "Derived stack status", Required: true},
 					"containers": {Type: "array", Description: "Per-container health state", Required: true},
 				},
@@ -666,7 +676,8 @@ func (r *Reconciler) pollStackHealth(ctx context.Context) {
 		repoPath, _ := deployment["path"].(string)
 		fullName := fmt.Sprintf("%s/%s", owner, repo)
 
-		// TODO: #20 poller and list_deployments both call listComposePSContainers; consolidate in a later pass.
+		// Note: health polling and list_deployments both call listComposePSContainers today.
+		// Keep the duplication for now to avoid coupling the poller to UI payload assembly.
 		containers, err := listComposePSContainers(repoPath)
 		snapshot := stackHealthSnapshot{
 			Status:     "unknown",
@@ -1291,9 +1302,9 @@ func (r *Reconciler) pruneService(ctx context.Context, fullName, owner, repo, pa
 func (r *Reconciler) runComposeDown(ctx context.Context, fullName, repoLocalPath string, removeImages bool) error {
 	r.markExecutionRunning(ctx, fullName, core.ExecutionStageComposeDown)
 
-	args := []string{"down", "--remove-orphans"}
+	args := []string{"down", composeRemoveOrphansFlag}
 	if removeImages {
-		args = []string{"down", "--rmi", "all", "--remove-orphans"}
+		args = []string{"down", "--rmi", "all", composeRemoveOrphansFlag}
 	}
 
 	if err := executeComposeCommand(repoLocalPath, nil, nil, args...); err != nil {
@@ -1353,7 +1364,7 @@ func (r *Reconciler) prepareComposeEnvironment(ctx context.Context, owner, repo,
 			"repo":  repo,
 		})
 		if err != nil {
-			return nil, nil, func() {}, err
+			return nil, nil, noOpCleanup, err
 		}
 
 		secrets, ok := res.(map[string]string)
@@ -1384,7 +1395,7 @@ func (r *Reconciler) prepareComposeEnvironment(ctx context.Context, owner, repo,
 
 	persistedSecretValues, err := loadPersistedComposeEnv(repoLocalPath)
 	if err != nil {
-		return nil, nil, func() {}, err
+		return nil, nil, noOpCleanup, err
 	}
 	for k, v := range persistedSecretValues {
 		if _, exists := secretValues[k]; exists {
@@ -1411,15 +1422,15 @@ func (r *Reconciler) prepareComposeEnvironment(ctx context.Context, owner, repo,
 
 	runtimeFiles, err := r.collectRuntimeFiles(ctx, owner, repo, logger, secretSources)
 	if err != nil {
-		return nil, nil, func() {}, err
+		return nil, nil, noOpCleanup, err
 	}
 
 	runtimeFileEnv := []string{}
-	cleanupRuntimeFiles := func() {}
+	cleanupRuntimeFiles := noOpCleanup
 	if len(runtimeFiles) > 0 {
 		runtimeFileEnv, cleanupRuntimeFiles, err = materializeRuntimeFiles(runtimeFiles)
 		if err != nil {
-			return nil, nil, func() {}, err
+			return nil, nil, noOpCleanup, err
 		}
 	}
 
@@ -1594,7 +1605,7 @@ func (r *Reconciler) applyForceTypePreDeploy(ctx context.Context, fullName strin
 			if err := os.Remove(spec.filePath); err != nil && !os.IsNotExist(err) {
 				logger.Debug("failed to remove local compose file", "path", spec.filePath, "error", err)
 			}
-			deployPath := filepath.Join(spec.repoLocalPath, ".deploy")
+			deployPath := filepath.Join(spec.repoLocalPath, deployDirName)
 			if err := os.RemoveAll(deployPath); err != nil {
 				logger.Debug("failed to remove local deploy state", "path", deployPath, "error", err)
 			}
@@ -1769,7 +1780,7 @@ func (r *Reconciler) prepareDeployEnvironments(ctx context.Context, fullName str
 		logger.Error("Failed to prepare compose environment", "error", err)
 		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
-		return nil, nil, nil, func() {}, false
+		return nil, nil, nil, noOpCleanup, false
 	}
 
 	r.warnOnComposeEnvPersistenceRisks(ctx, repo, spec.content, secretEnv, logger)
@@ -1797,7 +1808,7 @@ func (r *Reconciler) runPreHooks(ctx context.Context, fullName string, repo *git
 		}
 	}
 
-	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, ".deploy", "pre"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
+	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, deployDirName, "pre"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
 		logger.Error("Repo Pre-hook failed, aborting deploy", "error", err)
 		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		r.failExecution(ctx, fullName, core.ExecutionStageHooks, err)
@@ -1818,7 +1829,7 @@ func (r *Reconciler) runComposeUpPhase(ctx context.Context, fullName string, rep
 	}
 
 	logger.Info("Running docker compose up")
-	if err := executeComposeCommand(spec.repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d", "--remove-orphans"); err != nil {
+	if err := executeComposeCommand(spec.repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d", composeRemoveOrphansFlag); err != nil {
 		logger.Error("Deploy failed", "error", err)
 		r.publishDeployEvent(ctx, "deploy_failed", repo, "failed", err.Error(), "", deployStart)
 		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
@@ -1829,7 +1840,7 @@ func (r *Reconciler) runComposeUpPhase(ctx context.Context, fullName string, rep
 }
 
 func (r *Reconciler) runPostHooks(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, hookEnv []string, logger *slog.Logger, deployStart time.Time) bool {
-	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, ".deploy", "post"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
+	if err := utils.ExecuteHooks(ctx, filepath.Join(spec.repoLocalPath, deployDirName, "post"), hookEnv, logger, r.cfg.HookTimeout); err != nil {
 		logger.Error("Repo Post-hook failed", "error", err)
 	}
 
@@ -1900,7 +1911,7 @@ func (r *Reconciler) collectRuntimeFiles(ctx context.Context, owner, repo string
 func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error) {
 	runtimeDir, err := os.MkdirTemp("", "gitops-runtime-files-*")
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("create temp runtime dir: %w", err)
+		return nil, noOpCleanup, fmt.Errorf("create temp runtime dir: %w", err)
 	}
 
 	cleanup := func() {
@@ -1909,7 +1920,7 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 
 	if err := os.Chmod(runtimeDir, 0700); err != nil {
 		cleanup()
-		return nil, func() {}, fmt.Errorf("chmod runtime dir: %w", err)
+		return nil, noOpCleanup, fmt.Errorf("chmod runtime dir: %w", err)
 	}
 
 	envToPath := make(map[string]string, len(files))
@@ -1917,7 +1928,7 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 		envKey := strings.TrimSpace(file.EnvKey)
 		if envKey == "" || strings.Contains(envKey, "=") {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("invalid runtime file env key")
+			return nil, noOpCleanup, fmt.Errorf("invalid runtime file env key")
 		}
 
 		filename := strings.TrimSpace(file.Filename)
@@ -1927,7 +1938,7 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 		filename = filepath.Base(filename)
 		if filename == "" || filename == "." {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("invalid runtime file name for %s", envKey)
+			return nil, noOpCleanup, fmt.Errorf("invalid runtime file name for %s", envKey)
 		}
 
 		targetPath := filepath.Join(runtimeDir, fmt.Sprintf("%02d_%s", idx, filename))
@@ -1937,7 +1948,7 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 		}
 		if err := os.WriteFile(targetPath, file.Content, mode); err != nil {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("write runtime file for %s: %w", envKey, err)
+			return nil, noOpCleanup, fmt.Errorf("write runtime file for %s: %w", envKey, err)
 		}
 
 		envToPath[envKey] = targetPath
@@ -1954,6 +1965,10 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 		env = append(env, fmt.Sprintf("%s=%s", key, envToPath[key]))
 	}
 	return env, cleanup, nil
+}
+
+func noOpCleanup() {
+	// Some code paths have nothing to clean up but still need a valid cleanup callback.
 }
 
 func (r *Reconciler) publishDeployEvent(ctx context.Context, eventType string, repo *github.Repository, status, message, duration string, start time.Time) {
@@ -1994,7 +2009,7 @@ func (r *Reconciler) publishStackLocked(ctx context.Context, owner, repo, fullNa
 
 // fetchRepoHookScriptsForStage downloads all scripts from .deploy/{stage} to the local repo dir.
 func (r *Reconciler) fetchRepoHookScriptsForStage(ctx context.Context, owner, repo, stage, localDir string) error {
-	path := fmt.Sprintf(".deploy/%s", stage)
+	path := fmt.Sprintf("%s/%s", deployDirName, stage)
 	_, dirContent, _, err := r.client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
 		if strings.Contains(err.Error(), "404") {
@@ -2003,7 +2018,7 @@ func (r *Reconciler) fetchRepoHookScriptsForStage(ctx context.Context, owner, re
 		return err
 	}
 
-	hooksDir := filepath.Join(localDir, ".deploy", stage)
+	hooksDir := filepath.Join(localDir, deployDirName, stage)
 	if err := os.MkdirAll(hooksDir, 0755); err != nil {
 		return err
 	}
