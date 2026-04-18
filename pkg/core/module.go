@@ -116,29 +116,8 @@ func (m *ModuleManager) Publish(ctx context.Context, event InternalEvent) {
 	}
 	event.Timestamp = time.Now()
 
-	m.eventTypesMu.RLock()
-	desc, ok := m.eventTypes[event.Type]
-	m.eventTypesMu.RUnlock()
-	if ok {
-		for field, spec := range desc.PayloadSpec {
-			if spec.Required {
-				if _, has := event.Details[field]; !has {
-					m.logger.Warn("Published event missing required field", "event_type", event.Type, "field", field)
-				}
-			}
-		}
-	}
-
-	m.subscribersMu.RLock()
-	defer m.subscribersMu.RUnlock()
-
-	for pattern, listeners := range m.subscribers {
-		if matchesPattern(string(event.Type), pattern) {
-			for _, listener := range listeners {
-				go listener(ctx, event)
-			}
-		}
-	}
+	m.warnOnMissingEventFields(event)
+	m.publishToSubscribers(ctx, event)
 }
 
 func (m *ModuleManager) GetMuxServer() *http.ServeMux {
@@ -257,43 +236,24 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 	allowlist := m.pluginAllowlist()
 	allowset := make(map[string]struct{}, len(allowlist))
 	if len(allowlist) > 0 {
-		for _, name := range allowlist {
-			allowset[name] = struct{}{}
-		}
+		allowset = buildAllowset(allowlist)
 		m.logger.Info("Plugin allowlist active", "allowed", allowlist)
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".so") {
+		if !isPluginFile(entry) {
 			continue
 		}
 
 		name := strings.TrimSuffix(entry.Name(), ".so")
-		if len(allowset) > 0 {
-			if _, ok := allowset[name]; !ok {
-				m.logger.Info("Skipping plugin (not in allowlist)", "plugin", name, "allowlist", allowlist)
-				continue
-			}
+		if !pluginAllowed(name, allowset) {
+			m.logger.Info("Skipping plugin (not in allowlist)", "plugin", name, "allowlist", allowlist)
+			continue
 		}
 
 		path := filepath.Join(dir, entry.Name())
-		m.logger.Info("Loading plugin", "path", path)
-
-		p, err := plugin.Open(path)
-		if err != nil {
-			m.logger.Error("Failed to open plugin", "path", path, "error", err)
-			continue
-		}
-
-		sym, err := p.Lookup("Plugin")
-		if err != nil {
-			m.logger.Error("Plugin symbol not found", "path", path, "error", err)
-			continue
-		}
-
-		plug, ok := resolvePluginSymbol(sym)
-		if !ok || plug == nil {
-			m.logger.Error("Plugin has wrong type (must implement core.Plugin)", "path", path)
+		plug, ok := m.loadPluginFile(path)
+		if !ok {
 			continue
 		}
 
@@ -359,29 +319,96 @@ func resolvePluginSymbol(sym any) (Plugin, bool) {
 
 	// plugin.Lookup returns a pointer to the exported variable. Unwrap pointers
 	// until we find a value that implements Plugin.
-	val := reflect.ValueOf(sym)
+	return pluginFromValue(reflect.ValueOf(sym))
+}
+
+func (m *ModuleManager) warnOnMissingEventFields(event InternalEvent) {
+	m.eventTypesMu.RLock()
+	desc, ok := m.eventTypes[event.Type]
+	m.eventTypesMu.RUnlock()
+	if !ok {
+		return
+	}
+	for field, spec := range desc.PayloadSpec {
+		if !spec.Required {
+			continue
+		}
+		if _, has := event.Details[field]; !has {
+			m.logger.Warn("Published event missing required field", "event_type", event.Type, "field", field)
+		}
+	}
+}
+
+func (m *ModuleManager) publishToSubscribers(ctx context.Context, event InternalEvent) {
+	m.subscribersMu.RLock()
+	defer m.subscribersMu.RUnlock()
+
+	for pattern, listeners := range m.subscribers {
+		if !matchesPattern(string(event.Type), pattern) {
+			continue
+		}
+		for _, listener := range listeners {
+			go listener(ctx, event)
+		}
+	}
+}
+
+func buildAllowset(allowlist []string) map[string]struct{} {
+	allowset := make(map[string]struct{}, len(allowlist))
+	for _, name := range allowlist {
+		allowset[name] = struct{}{}
+	}
+	return allowset
+}
+
+func isPluginFile(entry os.DirEntry) bool {
+	return !entry.IsDir() && strings.HasSuffix(entry.Name(), ".so")
+}
+
+func pluginAllowed(name string, allowset map[string]struct{}) bool {
+	if len(allowset) == 0 {
+		return true
+	}
+	_, ok := allowset[name]
+	return ok
+}
+
+func (m *ModuleManager) loadPluginFile(path string) (Plugin, bool) {
+	m.logger.Info("Loading plugin", "path", path)
+
+	opened, err := plugin.Open(path)
+	if err != nil {
+		m.logger.Error("Failed to open plugin", "path", path, "error", err)
+		return nil, false
+	}
+
+	sym, err := opened.Lookup("Plugin")
+	if err != nil {
+		m.logger.Error("Plugin symbol not found", "path", path, "error", err)
+		return nil, false
+	}
+
+	plug, ok := resolvePluginSymbol(sym)
+	if !ok || plug == nil {
+		m.logger.Error("Plugin has wrong type (must implement core.Plugin)", "path", path)
+		return nil, false
+	}
+
+	return plug, true
+}
+
+func pluginFromValue(val reflect.Value) (Plugin, bool) {
 	for val.IsValid() && val.Kind() == reflect.Ptr {
 		if val.IsNil() {
 			return nil, false
 		}
 		val = val.Elem()
-		if !val.IsValid() {
-			return nil, false
-		}
-		if val.CanInterface() {
-			if plug, ok := val.Interface().(Plugin); ok {
-				return plug, true
-			}
-		}
 	}
-
-	if val.IsValid() && val.CanInterface() {
-		if plug, ok := val.Interface().(Plugin); ok {
-			return plug, true
-		}
+	if !val.IsValid() || !val.CanInterface() {
+		return nil, false
 	}
-
-	return nil, false
+	plug, ok := val.Interface().(Plugin)
+	return plug, ok
 }
 
 // Init initializes all registered modules in registration order.

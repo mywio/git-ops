@@ -34,6 +34,10 @@ type composeRunResult struct {
 	Updated bool
 }
 
+func noOpImageRefreshCleanup() {
+	// Some image refresh code paths have no runtime files to clean up.
+}
+
 var runImageRefreshComposeCommand = func(stackPath string, composeEnv, runtimeFileEnv []string, args ...string) ([]byte, error) {
 	cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
 	cmd.Dir = stackPath
@@ -90,7 +94,7 @@ func prepareImageRefreshComposeEnvironment(ctx context.Context, registry core.Pl
 	}
 
 	runtimeFileEnv := []string{}
-	cleanup := func() {}
+	cleanup := noOpImageRefreshCleanup
 	if len(runtimeFiles) > 0 {
 		runtimeFileEnv, cleanup, err = materializeImageRefreshRuntimeFiles(runtimeFiles)
 		if err != nil {
@@ -220,14 +224,11 @@ func collectImageRefreshRuntimeFiles(ctx context.Context, registry core.PluginRe
 			return nil, fmt.Errorf("plugin %s returned unexpected runtime file payload", plugin.Name())
 		}
 		for _, file := range runtimeFiles {
-			key := strings.TrimSpace(file.EnvKey)
-			if key == "" || strings.Contains(key, "=") {
-				return nil, fmt.Errorf("plugin %s returned invalid env key %q", plugin.Name(), key)
+			key, ok := validateRuntimeFileKey(plugin.Name(), file.EnvKey)
+			if !ok {
+				return nil, fmt.Errorf("plugin %s returned invalid env key %q", plugin.Name(), strings.TrimSpace(file.EnvKey))
 			}
-			if _, exists := existingSources[key]; exists {
-				continue
-			}
-			if _, exists := runtimeSources[key]; exists {
+			if shouldSkipRuntimeFileKey(key, existingSources, runtimeSources) {
 				continue
 			}
 			file.EnvKey = key
@@ -241,7 +242,7 @@ func collectImageRefreshRuntimeFiles(ctx context.Context, registry core.PluginRe
 func materializeImageRefreshRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error) {
 	runtimeDir, err := os.MkdirTemp("", "gitops-image-refresh-runtime-*")
 	if err != nil {
-		return nil, func() {}, err
+		return nil, noOpImageRefreshCleanup, err
 	}
 	cleanup := func() {
 		_ = os.RemoveAll(runtimeDir)
@@ -256,7 +257,7 @@ func materializeImageRefreshRuntimeFiles(files []core.RuntimeFile) ([]string, fu
 		filename = filepath.Base(filename)
 		if filename == "" || filename == "." {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("invalid runtime file name for %s", file.EnvKey)
+			return nil, noOpImageRefreshCleanup, fmt.Errorf("invalid runtime file name for %s", file.EnvKey)
 		}
 		targetPath := filepath.Join(runtimeDir, fmt.Sprintf("%02d_%s", index, filename))
 		mode := os.FileMode(file.Mode & 0o777)
@@ -265,7 +266,7 @@ func materializeImageRefreshRuntimeFiles(files []core.RuntimeFile) ([]string, fu
 		}
 		if err := os.WriteFile(targetPath, file.Content, mode); err != nil {
 			cleanup()
-			return nil, func() {}, err
+			return nil, noOpImageRefreshCleanup, err
 		}
 		envToPath[file.EnvKey] = targetPath
 	}
@@ -280,6 +281,24 @@ func materializeImageRefreshRuntimeFiles(files []core.RuntimeFile) ([]string, fu
 		env = append(env, fmt.Sprintf("%s=%s", key, envToPath[key]))
 	}
 	return env, cleanup, nil
+}
+
+func validateRuntimeFileKey(pluginName, key string) (string, bool) {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" || strings.Contains(trimmed, "=") {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func shouldSkipRuntimeFileKey(key string, existingSources, runtimeSources map[string]string) bool {
+	if _, exists := existingSources[key]; exists {
+		return true
+	}
+	if _, exists := runtimeSources[key]; exists {
+		return true
+	}
+	return false
 }
 
 func runImageRefreshPreflight(stackPath string, runtimeFileEnv []string) error {

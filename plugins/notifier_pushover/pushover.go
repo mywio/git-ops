@@ -34,24 +34,7 @@ func (n *PushoverNotifier) Name() string {
 
 func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	n.logger = logger
-	var subscribeProvided bool
-	var subscribePatterns []string
-	if registry != nil {
-		n.client = registry.GetHTTPClient()
-		cfg := registry.GetConfig()
-		if section, ok := cfg["pushover"]; ok {
-			if _, okSub := section["subscribe"]; okSub {
-				subscribeProvided = true
-			}
-			var pushoverCfg pushoverConfig
-			if err := core.DecodeConfigSection(section, &pushoverCfg); err != nil {
-				n.logger.WarnContext(ctx, "Invalid pushover config", "error", err)
-			}
-			n.token = core.NewSecret(pushoverCfg.Token)
-			n.user = pushoverCfg.User
-			subscribePatterns = parseSubscribePatterns(section)
-		}
-	}
+	subscribeProvided, subscribePatterns := n.loadConfig(ctx, registry)
 	if n.client == nil {
 		n.client = http.DefaultClient
 	}
@@ -77,6 +60,33 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 	}
 
 	return nil
+}
+
+func (n *PushoverNotifier) loadConfig(ctx context.Context, registry core.PluginRegistry) (bool, []string) {
+	subscribeProvided := false
+	subscribePatterns := []string(nil)
+	if registry == nil {
+		return false, nil
+	}
+
+	n.client = registry.GetHTTPClient()
+	cfg := registry.GetConfig()
+	section, ok := cfg["pushover"]
+	if !ok {
+		return false, nil
+	}
+
+	if _, okSub := section["subscribe"]; okSub {
+		subscribeProvided = true
+	}
+	var pushoverCfg pushoverConfig
+	if err := core.DecodeConfigSection(section, &pushoverCfg); err != nil {
+		n.logger.WarnContext(ctx, "Invalid pushover config", "error", err)
+	}
+	n.token = core.NewSecret(pushoverCfg.Token)
+	n.user = pushoverCfg.User
+	subscribePatterns = parseSubscribePatterns(section)
+	return subscribeProvided, subscribePatterns
 }
 
 func (n *PushoverNotifier) Start(ctx context.Context) error {
@@ -114,59 +124,6 @@ func (n *PushoverNotifier) process(ctx context.Context, event core.InternalEvent
 }
 
 func (n *PushoverNotifier) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
-	//if n.token == "" || n.user == "" {
-	//	slog.Debug("Pushover token or user not set, skipping notification")
-	//	return nil, nil // silent skip if not set
-	//}
-	//
-	//if action != "notify" {
-	//	return nil, fmt.Errorf("unsupported action")
-	//}
-	//
-	//eventRaw, ok := params["event"]
-	//if !ok {
-	//	return nil, fmt.Errorf("missing event")
-	//}
-	//
-	//event, ok := eventRaw.(core.Event)
-	//if !ok {
-	//	return nil, fmt.Errorf("invalid event type")
-	//}
-	//
-	//priority := 0
-	//if event.Type == core.EventDeployFailed || event.Type == core.EventHookError {
-	//	priority = 1 // or higher
-	//}
-	//
-	//details, _ := json.Marshal(event.Details) // Assuming Details is map[string]interface{}
-	//
-	//payload := map[string]interface{}{
-	//	"token":    n.token,
-	//	"user":     n.user,
-	//	"message":  fmt.Sprintf("[%s] %s\nRepo: %s/%s\n%s", event.Type, event.Message, event.Owner, event.Repo, string(details)),
-	//	"title":    "git-ops Notification",
-	//	"priority": priority,
-	//}
-	//
-	//data, err := json.Marshal(payload)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
-	//resp, err := http.Post("https://api.pushover.net/1/messages.json", "application/json", bytes.NewBuffer(data))
-	//if err != nil {
-	//	slog.Error("Failed to send Pushover notification", "error", err)
-	//	return nil, err
-	//}
-	//defer resp.Body.Close()
-	//
-	//if resp.StatusCode != 200 {
-	//	slog.Error("Pushover API error", "status", resp.StatusCode)
-	//	return nil, fmt.Errorf("pushover API error: %d", resp.StatusCode)
-	//}
-	//
-	//slog.Info("Pushover notification delivered successfully")
-	//return map[string]string{"status": "delivered"}, nil
 	return nil, nil
 }
 
@@ -200,8 +157,6 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 		"user":    n.user,
 		"message": notification.Body,
 		"title":   notification.Title,
-		// TODO: Add a config-driven priority map that maps notification/event types to Pushover priority levels.
-		//"priority": ,
 	}
 
 	data, err := json.Marshal(payload)
@@ -274,37 +229,3 @@ func parseSubscribePatterns(section map[string]any) []string {
 		return normalizePatterns([]string{fmt.Sprint(v)})
 	}
 }
-
-// TODO: Restore or remove this standalone testing stub after the notifier refactor is complete.
-// Main for standalone testing
-//func main() {
-//	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-//	n := &PushoverNotifier{}
-//	ctx := context.Background()
-//	if err := n.Init(ctx, logger, nil); err != nil { // nil registry for testing
-//		logger.Error("Init failed", "error", err)
-//		return
-//	}
-//	if err := n.Start(ctx); err != nil {
-//		logger.Error("Start failed", "error", err)
-//		return
-//	}
-//
-//	// Test Execute
-//	//event := core.Event{
-//	//	Type:    "test",
-//	//	Owner:   "owner",
-//	//	Repo:    "repo",
-//	//	Message: "message",
-//	//	Details: map[string]interface{}{"key": "value"},
-//	//}
-//	params := map[string]interface{}{"event": event}
-//	result, err := n.Execute(ctx, "notify", params)
-//	if err != nil {
-//		logger.Error("Execute failed", "error", err)
-//	} else {
-//		logger.Info("Execute result", "result", result)
-//	}
-//
-//	n.Stop(ctx)
-//}
