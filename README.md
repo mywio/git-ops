@@ -77,6 +77,22 @@ The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
 Prebuilt binaries are also published as `git-ops-linux-amd64.tar.gz` release assets.
 The official container image is published as `ghcr.io/mywio/git-ops:latest`.
 
+### Mutation testing
+
+Mutation testing runs in a separate GitHub Actions workflow so it does not slow down normal CI.
+
+- Trigger it manually from the `Mutation Testing` workflow in GitHub Actions
+- It also runs weekly on Monday
+- Reports are uploaded as workflow artifacts, one per target package
+
+The current mutation workflow covers:
+
+- `./pkg/core`
+- `./pkg/config`
+- `./pkg/utils`
+- `./plugins/mcp`
+- `./plugins/reconciler`
+
 ## Configuration (Env Vars)
 
 | Variable | Description | Required | Example |

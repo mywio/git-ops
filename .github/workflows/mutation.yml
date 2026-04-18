@@ -1,0 +1,54 @@
+name: Mutation Testing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+jobs:
+  mutesting:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pkg-core
+            target: ./pkg/core
+          - name: pkg-config
+            target: ./pkg/config
+          - name: pkg-utils
+            target: ./pkg/utils
+          - name: plugins-mcp
+            target: ./plugins/mcp
+          - name: plugins-reconciler
+            target: ./plugins/reconciler
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Install go-mutesting
+        run: go install github.com/avito-tech/go-mutesting/cmd/go-mutesting@latest
+
+      - name: Run mutation testing
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p mutation-reports
+          set +e
+          "$HOME/go/bin/go-mutesting" --config .mutesting.yml "${{ matrix.target }}" > "mutation-reports/${{ matrix.name }}.log" 2>&1
+          status=$?
+          if [ -f report.json ]; then
+            mv report.json "mutation-reports/${{ matrix.name }}.json"
+          fi
+          exit $status
+
+      - name: Upload mutation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-${{ matrix.name }}
+          path: mutation-reports/${{ matrix.name }}.*
+          if-no-files-found: ignore
