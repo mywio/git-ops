@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const errMethodNotAllowed = "method not allowed"
+
 type pluginInfo struct {
 	Name         string        `json:"name"`
 	Description  string        `json:"description,omitempty"`
@@ -24,7 +26,7 @@ func (m *ModuleManager) registerCoreRoutes() {
 
 func (m *ModuleManager) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": errMethodNotAllowed})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -32,7 +34,7 @@ func (m *ModuleManager) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (m *ModuleManager) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": errMethodNotAllowed})
 		return
 	}
 	includeConfig := strings.EqualFold(r.URL.Query().Get("include_config"), "true")
@@ -46,7 +48,7 @@ func (m *ModuleManager) handlePlugins(w http.ResponseWriter, r *http.Request) {
 
 func (m *ModuleManager) handlePlugin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": errMethodNotAllowed})
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/api/plugins/")

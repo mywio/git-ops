@@ -98,7 +98,7 @@ function deploymentLabel(dep: Deployment) {
 
 /* --- App Component --- */
 function App() {
-    const [activeTab, setActiveTab] = useState(() => tabFromPath(window.location.pathname));
+    const [activeTab, setActiveTab] = useState(() => tabFromPath(globalThis.location.pathname));
     const [systemInfo, setSystemInfo] = useState<any>(null);
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [plugins, setPlugins] = useState<PluginInfo[]>([]);
@@ -106,9 +106,10 @@ function App() {
 
     // Logs state
     const [selectedLogStack, setSelectedLogStack] = useState<Deployment | null>(null);
-    const [logs, setLogs] = useState<string[]>([]);
+    const [logs, setLogs] = useState<Array<{ id: number; line: string }>>([]);
     const logContainerRef = useRef<HTMLDivElement>(null);
     const evtSource = useRef<EventSource | null>(null);
+    const nextLogID = useRef(0);
 
     useEffect(() => {
         fetchData();
@@ -116,11 +117,11 @@ function App() {
 
     useEffect(() => {
         const handlePopState = () => {
-            setActiveTab(tabFromPath(window.location.pathname));
+            setActiveTab(tabFromPath(globalThis.location.pathname));
         };
 
-        window.addEventListener('popstate', handlePopState);
-        return () => window.removeEventListener('popstate', handlePopState);
+        globalThis.addEventListener('popstate', handlePopState);
+        return () => globalThis.removeEventListener('popstate', handlePopState);
     }, []);
 
     const fetchData = async () => {
@@ -153,6 +154,7 @@ function App() {
                 evtSource.current.close();
             }
             setLogs([]);
+            nextLogID.current = 0;
 
             const params = new URLSearchParams({ lines: '100' });
             if (selectedLogStack.kind === 'container' && selectedLogStack.container) {
@@ -167,7 +169,10 @@ function App() {
 
             sse.onmessage = (event) => {
                 // Handle escaped newlines
-                const lines = event.data.split('\\n');
+                const lines = event.data.split(String.raw`\n`).map((line) => ({
+                    id: nextLogID.current++,
+                    line,
+                }));
                 setLogs(prev => [...prev, ...lines]);
 
                 // Auto scroll
@@ -179,7 +184,7 @@ function App() {
             };
 
             sse.onerror = () => {
-                setLogs(prev => [...prev, "--- Log stream disconnected ---"]);
+                setLogs(prev => [...prev, { id: nextLogID.current++, line: "--- Log stream disconnected ---" }]);
                 sse.close();
             };
         }
@@ -201,8 +206,8 @@ function App() {
     const handleTabClick = (tabId: string) => {
         setActiveTab(tabId);
         const nextPath = tabPaths[tabId] || '/ui/system';
-        if (window.location.pathname !== nextPath) {
-            window.history.pushState({}, '', nextPath);
+        if (globalThis.location.pathname !== nextPath) {
+            globalThis.history.pushState({}, '', nextPath);
         }
     };
 
@@ -340,7 +345,7 @@ function App() {
                                 {logs.length === 0 ? (
                                     <div className="text-muted">Waiting for logs...</div>
                                 ) : (
-                                    logs.map((line, i) => <div key={i} className="log-line">{line}</div>)
+                                    logs.map((entry) => <div key={entry.id} className="log-line">{entry.line}</div>)
                                 )}
                             </div>
                         </div>

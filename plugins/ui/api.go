@@ -12,6 +12,11 @@ import (
 	"github.com/mywio/git-ops/pkg/core"
 )
 
+const (
+	uiMethodNotAllowed = "Method not allowed"
+	headerContentType  = "Content-Type"
+)
+
 func (p *UIPlugin) registerRoutes() {
 	if p.mux == nil {
 		return
@@ -28,7 +33,7 @@ func (p *UIPlugin) registerRoutes() {
 
 func (p *UIPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, uiMethodNotAllowed, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -56,7 +61,7 @@ func (p *UIPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
 
 func (p *UIPlugin) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, uiMethodNotAllowed, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -77,7 +82,7 @@ func (p *UIPlugin) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 
 func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, uiMethodNotAllowed, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -94,11 +99,6 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "container or owner and repo are required", http.StatusBadRequest)
 		return
 	}
-
-	// This is a simple SSE implementation for streaming logs.
-	// Since HTTP requests execute synchronously, streaming via a plugin Execute method needs
-	// a channel or an io.Reader. For simplicity in the Execute abstraction, the plugin might
-	// return an io.ReadCloser (like stdout pipe) or a channel of strings.
 
 	deployers := p.registry.GetPluginsWithCapability(core.CapabilityDeployer)
 	if len(deployers) == 0 {
@@ -121,57 +121,19 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// We expect the plugin to return a channel of strings
-	logChan, ok := res.(<-chan string)
-	if !ok {
-		// Fallback: it might just be a string block natively if tailing is not supported
-		if logStr, ok := res.(string); ok {
+	if logStr, logChan, ok := parseLogsResult(res); ok {
+		if logChan == nil {
 			writeJSON(w, http.StatusOK, map[string]string{"logs": logStr})
 			return
 		}
-		http.Error(w, "Plugin returned unsupported log format", http.StatusInternalServerError)
+		p.streamLogChannel(w, r, logChan)
 		return
 	}
-
-	// Setup SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	// Stream from channel to HTTP response Writer
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case line, ok := <-logChan:
-			if !ok {
-				// channel closed
-				if _, err := fmt.Fprintf(w, "event: close\ndata: \n\n"); err != nil {
-					slog.Default().Debug("failed to write SSE close event", "error", err)
-				}
-				flusher.Flush()
-				return
-			}
-			// Escape newlines for SSE format
-			safeLine := strings.ReplaceAll(line, "\n", "\\n")
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", safeLine); err != nil {
-				slog.Default().Debug("failed to write SSE log event", "error", err)
-				return
-			}
-			flusher.Flush()
-		}
-	}
+	http.Error(w, "Plugin returned unsupported log format", http.StatusInternalServerError)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	w.WriteHeader(status)
 	if data != nil {
 		if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -198,7 +160,7 @@ func (p *UIPlugin) handleUIRootRedirect(w http.ResponseWriter, r *http.Request) 
 
 func (p *UIPlugin) handleFrontend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, uiMethodNotAllowed, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -226,9 +188,53 @@ func (p *UIPlugin) handleFrontend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "UI assets unavailable", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set(headerContentType, "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(index); err != nil {
 		p.logger.Debug("failed to write UI index response", "error", err)
+	}
+}
+
+func parseLogsResult(res interface{}) (string, <-chan string, bool) {
+	if logChan, ok := res.(<-chan string); ok {
+		return "", logChan, true
+	}
+	if logStr, ok := res.(string); ok {
+		return logStr, nil, true
+	}
+	return "", nil, false
+}
+
+func (p *UIPlugin) streamLogChannel(w http.ResponseWriter, r *http.Request, logChan <-chan string) {
+	w.Header().Set(headerContentType, "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-logChan:
+			if !ok {
+				if _, err := fmt.Fprintf(w, "event: close\ndata: \n\n"); err != nil {
+					slog.Default().Debug("failed to write SSE close event", "error", err)
+				}
+				flusher.Flush()
+				return
+			}
+			safeLine := strings.ReplaceAll(line, "\n", "\\n")
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", safeLine); err != nil {
+				slog.Default().Debug("failed to write SSE log event", "error", err)
+				return
+			}
+			flusher.Flush()
+		}
 	}
 }

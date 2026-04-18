@@ -32,7 +32,9 @@ func ExecuteHooks(ctx context.Context, dir string, env []string, logger *slog.Lo
 		logger.Info("Running hook", "script", entry.Name())
 
 		hookCtx := ctx
-		cancel := func() {}
+		cancel := func() {
+			// No timeout was configured, so there is no derived context to cancel.
+		}
 		if timeout > 0 {
 			hookCtx, cancel = context.WithTimeout(ctx, timeout)
 		}

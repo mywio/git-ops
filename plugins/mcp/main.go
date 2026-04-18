@@ -25,6 +25,12 @@ import (
 //go:embed docs/**/*
 var docsFS embed.FS
 
+const (
+	mcpDocsPrefix       = "/mcp/docs/"
+	dockerFormatArg     = "--format"
+	dockerJSONFormatArg = "json"
+)
+
 // MCPPlugin struct implements core.Plugin
 type MCPPlugin struct {
 	logger    *slog.Logger
@@ -111,10 +117,10 @@ func (p *MCPPlugin) Start(ctx context.Context) error {
 	if docsSub, err := fs.Sub(docsFS, "docs"); err == nil {
 		fileServer := http.FileServer(http.FS(docsSub))
 		p.mux.HandleFunc("/mcp/docs", authMiddleware(p.apiKey, func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/mcp/docs/", http.StatusMovedPermanently)
+			http.Redirect(w, r, mcpDocsPrefix, http.StatusMovedPermanently)
 		}))
-		p.mux.HandleFunc("/mcp/docs/", authMiddleware(p.apiKey, func(w http.ResponseWriter, r *http.Request) {
-			http.StripPrefix("/mcp/docs/", fileServer).ServeHTTP(w, r)
+		p.mux.HandleFunc(mcpDocsPrefix, authMiddleware(p.apiKey, func(w http.ResponseWriter, r *http.Request) {
+			http.StripPrefix(mcpDocsPrefix, fileServer).ServeHTTP(w, r)
 		}))
 	} else {
 		p.logger.Warn("MCP docs not available", "error", err)
@@ -254,7 +260,7 @@ func (p *MCPPlugin) handleServices(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
-	output, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json")
+	output, err := dockerComposeExec(p.targetDir, repo, "ps", dockerFormatArg, dockerJSONFormatArg)
 	if err != nil {
 		jsonError(w, err)
 		return
@@ -305,7 +311,7 @@ func (p *MCPPlugin) handleHealth(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
-	discoveryOutput, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json", service)
+	discoveryOutput, err := dockerComposeExec(p.targetDir, repo, "ps", dockerFormatArg, dockerJSONFormatArg, service)
 	if err != nil {
 		jsonError(w, err)
 		return
