@@ -72,7 +72,7 @@ func TestParseSubscribePatternsWebhook(t *testing.T) {
 func TestWebhookSendUsesNormalizedNotificationPayload(t *testing.T) {
 	var received core.NotificationPayload
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
@@ -121,7 +121,7 @@ func TestWebhookSendUsesNormalizedNotificationPayload(t *testing.T) {
 func TestWebhookSendKeepsLegacyMessageAndDetailsFields(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
@@ -138,10 +138,10 @@ func TestWebhookSendKeepsLegacyMessageAndDetailsFields(t *testing.T) {
 	}
 
 	event := core.InternalEvent{
-		Type:   core.EventTypeExecution,
-		Source: "reconciler",
-		Repo:   "api",
-		Message: "Execution failed while applying hooks",
+		Type:      core.EventTypeExecution,
+		Source:    "reconciler",
+		Repo:      "api",
+		Message:   "Execution failed while applying hooks",
 		Timestamp: time.Time{},
 		Details: map[string]any{
 			"execution_id": "exec-1",

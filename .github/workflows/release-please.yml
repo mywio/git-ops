@@ -24,6 +24,8 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -34,24 +36,22 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
 
       - name: Build
         run: |
-          make build
+          make build VERSION=${{ needs.release-please.outputs.tag_name }}
           make plugins
 
       - name: Package artifacts
         run: |
-          VERSION=${{ needs.release-please.outputs.tag_name }}
-          mkdir -p dist/git-ops-${VERSION}
-          cp bin/git-ops dist/git-ops-${VERSION}/
-          cp -r bin/plugins dist/git-ops-${VERSION}/
-          cp README.md dist/git-ops-${VERSION}/
-          tar -czf dist/git-ops-${VERSION}-linux-amd64.tar.gz -C dist git-ops-${VERSION}
+          mkdir -p dist/plugins
+          cp bin/git-ops dist/
+          cp bin/plugins/*.so dist/plugins/
+          tar -czf dist/git-ops-linux-amd64.tar.gz -C dist .
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: dist/*.tar.gz
+          files: dist/git-ops-linux-amd64.tar.gz

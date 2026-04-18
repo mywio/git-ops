@@ -219,7 +219,7 @@ func (n *PushoverNotifier) send(ctx context.Context, event core.InternalEvent) e
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("pushover API error: %d", resp.StatusCode)

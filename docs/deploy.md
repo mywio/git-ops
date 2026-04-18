@@ -17,6 +17,16 @@ Artifacts:
 - Core: `bin/git-ops`
 - Plugins: `bin/plugins/*.so`
 
+Prebuilt release archive:
+- `git-ops-linux-amd64.tar.gz`
+
+Official container image:
+- `ghcr.io/mywio/git-ops:latest`
+
+Notes:
+- Release archives and container images are built for `linux/amd64`.
+- Go plugins require the binary and `.so` files to be built together with the same Go toolchain.
+
 ## Configure
 Create a YAML config file (default `config.yaml` or set `CONFIG_FILE`):
 ```yaml
@@ -24,6 +34,7 @@ core:
   token: "ghp_123..."
   users: ["myuser", "myorg"]
   topic: ["homelab-server-1", "prod"]
+  plugins: ["reconciler", "ui", "discord"]
   target_dir: "/opt/stacks"
   interval: "5m"
   plugins_dir: "./bin/plugins"
@@ -81,9 +92,11 @@ Example `docker-compose.yml`:
 ```yaml
 services:
   git-ops:
-    image: ghcr.io/your-org/git-ops:latest
+    image: ghcr.io/mywio/git-ops:latest
     environment:
       - CONFIG_FILE=/etc/git-ops/config.yaml
+      - CORE_HTTP_ADDR=0.0.0.0:8080
+      - PLUGINS_ALLOW=reconciler,ui,audit
       - SECRET_API_KEY=example
       - DB_PASSWORD=example
     volumes:

@@ -169,7 +169,7 @@ func (p *WebhookPlugin) send(ctx context.Context, event core.InternalEvent) erro
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook status %d", resp.StatusCode)
@@ -248,5 +248,7 @@ func main() {
 	//	logger.Info("Execute result", "result", result)
 	//}
 
-	p.Stop(ctx)
+	if err := p.Stop(ctx); err != nil {
+		logger.Error("Stop failed", "error", err)
+	}
 }

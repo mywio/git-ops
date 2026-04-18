@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -325,7 +326,9 @@ func writeMCPError(w http.ResponseWriter, id json.RawMessage, code int, message,
 
 func writeRPC(w http.ResponseWriter, resp rpcResponse) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Default().Error("failed to encode MCP RPC response", "error", err)
+	}
 }
 
 // jsonObject builds a JSON Schema object node.
