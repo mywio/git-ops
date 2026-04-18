@@ -275,46 +275,10 @@ func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, or
 	query := "SELECT type, timestamp, source, repo, details, string_val FROM audit_events WHERE 1=1"
 	var args []any
 
-	if filter != nil {
-		for _, key := range auditFilterKeys {
-			value, ok := filter[key].(string)
-			if !ok || value == "" {
-				continue
-			}
-
-			column, ok := auditFilterColumns[key]
-			if !ok {
-				continue
-			}
-
-			query += fmt.Sprintf(" AND %s = ?", column)
-			args = append(args, value)
-		}
-	}
-
-	if since != nil {
-		query += " AND timestamp >= ?"
-		args = append(args, since.UTC())
-	}
-	if until != nil {
-		query += " AND timestamp <= ?"
-		args = append(args, until.UTC())
-	}
-
-	if strings.ToLower(order) == "asc" {
-		query += " ORDER BY timestamp ASC"
-	} else {
-		query += " ORDER BY timestamp DESC"
-	}
-
-	if limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, limit)
-		if offset > 0 {
-			query += " OFFSET ?"
-			args = append(args, offset)
-		}
-	}
+	query, args = appendAuditFilters(query, args, filter)
+	query, args = appendAuditTimeBounds(query, args, since, until)
+	query = appendAuditOrder(query, order)
+	query, args = appendAuditPagination(query, args, limit, offset)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -324,34 +288,93 @@ func (s *sqliteStore) GetLastEvents(filter map[string]any, limit, offset int, or
 
 	var events []core.InternalEvent
 	for rows.Next() {
-		var ev core.InternalEvent
-		var typeStr, sourceStr string
-		var detailsStr sql.NullString
-		var stringVal sql.NullString
-		var repoStr sql.NullString
-
-		if err := rows.Scan(&typeStr, &ev.Timestamp, &sourceStr, &repoStr, &detailsStr, &stringVal); err != nil {
+		ev, err := scanAuditEvent(rows)
+		if err != nil {
 			return nil, err
 		}
-
-		ev.Type = core.EventTypeName(typeStr)
-		ev.Source = sourceStr
-		if repoStr.Valid {
-			ev.Repo = repoStr.String
-		}
-		if stringVal.Valid {
-			ev.Message = stringVal.String
-		}
-		if detailsStr.Valid {
-			if err := json.Unmarshal([]byte(detailsStr.String), &ev.Details); err != nil {
-				return nil, err
-			}
-		}
-
 		events = append(events, ev)
 	}
 
 	return events, rows.Err()
+}
+
+func appendAuditFilters(query string, args []any, filter map[string]any) (string, []any) {
+	if filter == nil {
+		return query, args
+	}
+	for _, key := range auditFilterKeys {
+		value, ok := filter[key].(string)
+		if !ok || value == "" {
+			continue
+		}
+		column, ok := auditFilterColumns[key]
+		if !ok {
+			continue
+		}
+		query += fmt.Sprintf(" AND %s = ?", column)
+		args = append(args, value)
+	}
+	return query, args
+}
+
+func appendAuditTimeBounds(query string, args []any, since, until *time.Time) (string, []any) {
+	if since != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, since.UTC())
+	}
+	if until != nil {
+		query += " AND timestamp <= ?"
+		args = append(args, until.UTC())
+	}
+	return query, args
+}
+
+func appendAuditOrder(query, order string) string {
+	if strings.ToLower(order) == "asc" {
+		return query + " ORDER BY timestamp ASC"
+	}
+	return query + " ORDER BY timestamp DESC"
+}
+
+func appendAuditPagination(query string, args []any, limit, offset int) (string, []any) {
+	if limit <= 0 {
+		return query, args
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
+	if offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, offset)
+	}
+	return query, args
+}
+
+func scanAuditEvent(rows *sql.Rows) (core.InternalEvent, error) {
+	var ev core.InternalEvent
+	var typeStr, sourceStr string
+	var detailsStr sql.NullString
+	var stringVal sql.NullString
+	var repoStr sql.NullString
+
+	if err := rows.Scan(&typeStr, &ev.Timestamp, &sourceStr, &repoStr, &detailsStr, &stringVal); err != nil {
+		return core.InternalEvent{}, err
+	}
+
+	ev.Type = core.EventTypeName(typeStr)
+	ev.Source = sourceStr
+	if repoStr.Valid {
+		ev.Repo = repoStr.String
+	}
+	if stringVal.Valid {
+		ev.Message = stringVal.String
+	}
+	if detailsStr.Valid {
+		if err := json.Unmarshal([]byte(detailsStr.String), &ev.Details); err != nil {
+			return core.InternalEvent{}, err
+		}
+	}
+
+	return ev, nil
 }
 
 func (s *sqliteStore) Cleanup(keep int) error {

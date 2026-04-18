@@ -1660,29 +1660,37 @@ func (r *Reconciler) fetchComposeSpec(ctx context.Context, fullName string, repo
 
 func (r *Reconciler) applyForceTypePreDeploy(ctx context.Context, fullName string, spec composeSpec, forceType string, logger *slog.Logger) bool {
 	if forceType == "clean_local_state" {
-		logger.Info("Cleaning local state before deploy", "force_type", forceType)
-		if !r.cfg.DryRun {
-			if err := os.Remove(spec.filePath); err != nil && !os.IsNotExist(err) {
-				logger.Debug("failed to remove local compose file", "path", spec.filePath, "error", err)
-			}
-			deployPath := filepath.Join(spec.repoLocalPath, deployDirName)
-			if err := os.RemoveAll(deployPath); err != nil {
-				logger.Debug("failed to remove local deploy state", "path", deployPath, "error", err)
-			}
-		}
+		r.cleanLocalStateBeforeDeploy(spec, forceType, logger)
 		return true
 	}
 
 	if forceType == "remove_images" {
-		logger.Info("Removing local images before deploy", "force_type", forceType)
-		if !r.cfg.DryRun {
-			if err := r.runRemoveImagesIfPresent(ctx, fullName, spec.repoLocalPath, logger); err != nil {
-				return false
-			}
-		}
+		return r.removeImagesBeforeDeploy(ctx, fullName, spec.repoLocalPath, forceType, logger)
 	}
 
 	return true
+}
+
+func (r *Reconciler) cleanLocalStateBeforeDeploy(spec composeSpec, forceType string, logger *slog.Logger) {
+	logger.Info("Cleaning local state before deploy", "force_type", forceType)
+	if r.cfg.DryRun {
+		return
+	}
+	if err := os.Remove(spec.filePath); err != nil && !os.IsNotExist(err) {
+		logger.Debug("failed to remove local compose file", "path", spec.filePath, "error", err)
+	}
+	deployPath := filepath.Join(spec.repoLocalPath, deployDirName)
+	if err := os.RemoveAll(deployPath); err != nil {
+		logger.Debug("failed to remove local deploy state", "path", deployPath, "error", err)
+	}
+}
+
+func (r *Reconciler) removeImagesBeforeDeploy(ctx context.Context, fullName, repoLocalPath, forceType string, logger *slog.Logger) bool {
+	logger.Info("Removing local images before deploy", "force_type", forceType)
+	if r.cfg.DryRun {
+		return true
+	}
+	return r.runRemoveImagesIfPresent(ctx, fullName, repoLocalPath, logger) == nil
 }
 
 func (r *Reconciler) handleRestartOnly(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, forceType string, logger *slog.Logger) bool {

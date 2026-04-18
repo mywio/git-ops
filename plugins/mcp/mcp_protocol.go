@@ -13,7 +13,11 @@ import (
 	"time"
 )
 
-const mcpProtocolVersion = "2024-11-05"
+const (
+	mcpProtocolVersion = "2024-11-05"
+	mcpDockerFormatArg = "--format"
+	mcpDockerJSONArg   = "json"
+)
 
 // ── JSON-RPC 2.0 wire types ───────────────────────────────────────────────────
 
@@ -181,113 +185,21 @@ func (p *MCPPlugin) handleToolCall(w http.ResponseWriter, ctx context.Context, r
 }
 
 func (p *MCPPlugin) dispatchTool(_ context.Context, name string, args map[string]interface{}) (mcpToolResult, error) {
-	str := func(key string) string {
-		if v, ok := args[key].(string); ok {
-			return v
-		}
-		return ""
-	}
-
 	switch name {
 	case "list_stacks":
-		repos, err := listStacks(p.targetDir)
-		if err != nil {
-			return mcpToolResult{}, fmt.Errorf("list stacks: %w", err)
-		}
-		type stackEntry struct {
-			Repo         string `json:"repo"`
-			LastSync     string `json:"last_sync,omitempty"`
-			DeployStatus string `json:"deploy_status,omitempty"`
-			LastDeploy   string `json:"last_deploy,omitempty"`
-		}
-		entries := make([]stackEntry, 0, len(repos))
-		for _, repo := range repos {
-			e := stackEntry{Repo: repo}
-			if fi, err := os.Stat(filepath.Join(p.targetDir, filepath.FromSlash(repo))); err == nil {
-				e.LastSync = fi.ModTime().Format(time.RFC3339)
-			}
-			if info, ok := p.getDeploymentInfo(repo); ok {
-				e.DeployStatus = info.Status
-				e.LastDeploy = info.UpdatedAt.Format(time.RFC3339)
-			}
-			entries = append(entries, e)
-		}
-		return textResult(entries)
+		return p.dispatchListStacks()
 
 	case "list_deployments":
-		p.deployMu.RLock()
-		entries := make([]deploymentInfo, 0, len(p.deployments))
-		for _, info := range p.deployments {
-			entries = append(entries, info)
-		}
-		p.deployMu.RUnlock()
-		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
-		})
-		return textResult(entries)
+		return p.dispatchListDeployments()
 
 	case "get_services":
-		repo := str("repo")
-		if repo == "" {
-			return mcpToolResult{}, fmt.Errorf("repo is required")
-		}
-		output, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json")
-		if err != nil {
-			return mcpToolResult{}, fmt.Errorf("docker compose ps: %w", err)
-		}
-		// compose ps may return one JSON object per line rather than an array
-		var services []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &services); err != nil {
-			return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
-		}
-		return textResult(services)
+		return p.dispatchGetServices(toolStringArg(args, "repo"))
 
 	case "get_logs":
-		repo := str("repo")
-		service := str("service")
-		if repo == "" || service == "" {
-			return mcpToolResult{}, fmt.Errorf("repo and service are required")
-		}
-		lines := str("lines")
-		if lines == "" {
-			lines = "100"
-		}
-		dockerArgs := []string{"logs", "--tail", lines}
-		if since := str("since"); since != "" {
-			dockerArgs = append(dockerArgs, "--since", since)
-		}
-		dockerArgs = append(dockerArgs, service)
-		output, err := dockerComposeExec(p.targetDir, repo, dockerArgs...)
-		if err != nil {
-			return mcpToolResult{}, fmt.Errorf("docker compose logs: %w", err)
-		}
-		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
+		return p.dispatchGetLogs(args)
 
 	case "get_health":
-		repo := str("repo")
-		service := str("service")
-		if repo == "" || service == "" {
-			return mcpToolResult{}, fmt.Errorf("repo and service are required")
-		}
-		// Use compose ps to discover the actual container — avoids guessing names.
-		output, err := dockerComposeExec(p.targetDir, repo, "ps", "--format", "json", service)
-		if err != nil {
-			return mcpToolResult{}, fmt.Errorf("docker compose ps: %w", err)
-		}
-		// compose ps --format json may return an array or one object per line
-		var containers []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &containers); err != nil {
-			// try single-object fallback
-			var single map[string]interface{}
-			if err2 := json.Unmarshal([]byte(output), &single); err2 != nil {
-				return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
-			}
-			containers = []map[string]interface{}{single}
-		}
-		if len(containers) == 0 {
-			return mcpToolResult{}, fmt.Errorf("service %q not found in stack %q", service, repo)
-		}
-		return textResult(containers)
+		return p.dispatchGetHealth(args)
 
 	case "get_setup_info":
 		return textResult(map[string]string{
@@ -300,6 +212,134 @@ func (p *MCPPlugin) dispatchTool(_ context.Context, name string, args map[string
 	default:
 		return mcpToolResult{}, fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+type mcpStackEntry struct {
+	Repo         string `json:"repo"`
+	LastSync     string `json:"last_sync,omitempty"`
+	DeployStatus string `json:"deploy_status,omitempty"`
+	LastDeploy   string `json:"last_deploy,omitempty"`
+}
+
+func toolStringArg(args map[string]interface{}, key string) string {
+	if v, ok := args[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func (p *MCPPlugin) dispatchListStacks() (mcpToolResult, error) {
+	repos, err := listStacks(p.targetDir)
+	if err != nil {
+		return mcpToolResult{}, fmt.Errorf("list stacks: %w", err)
+	}
+	entries := make([]mcpStackEntry, 0, len(repos))
+	for _, repo := range repos {
+		entries = append(entries, p.stackEntry(repo))
+	}
+	return textResult(entries)
+}
+
+func (p *MCPPlugin) stackEntry(repo string) mcpStackEntry {
+	entry := mcpStackEntry{Repo: repo}
+	if fi, err := os.Stat(filepath.Join(p.targetDir, filepath.FromSlash(repo))); err == nil {
+		entry.LastSync = fi.ModTime().Format(time.RFC3339)
+	}
+	if info, ok := p.getDeploymentInfo(repo); ok {
+		entry.DeployStatus = info.Status
+		entry.LastDeploy = info.UpdatedAt.Format(time.RFC3339)
+	}
+	return entry
+}
+
+func (p *MCPPlugin) dispatchListDeployments() (mcpToolResult, error) {
+	p.deployMu.RLock()
+	entries := make([]deploymentInfo, 0, len(p.deployments))
+	for _, info := range p.deployments {
+		entries = append(entries, info)
+	}
+	p.deployMu.RUnlock()
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+	})
+	return textResult(entries)
+}
+
+func (p *MCPPlugin) dispatchGetServices(repo string) (mcpToolResult, error) {
+	if repo == "" {
+		return mcpToolResult{}, fmt.Errorf("repo is required")
+	}
+	output, err := dockerComposeExec(p.targetDir, repo, "ps", mcpDockerFormatArg, mcpDockerJSONArg)
+	if err != nil {
+		return mcpToolResult{}, fmt.Errorf("docker compose ps: %w", err)
+	}
+	return textResultOrRawJSONOutput(output)
+}
+
+func (p *MCPPlugin) dispatchGetLogs(args map[string]interface{}) (mcpToolResult, error) {
+	repo := toolStringArg(args, "repo")
+	service := toolStringArg(args, "service")
+	if repo == "" || service == "" {
+		return mcpToolResult{}, fmt.Errorf("repo and service are required")
+	}
+	dockerArgs := []string{"logs", "--tail", logLineLimit(toolStringArg(args, "lines"))}
+	if since := toolStringArg(args, "since"); since != "" {
+		dockerArgs = append(dockerArgs, "--since", since)
+	}
+	dockerArgs = append(dockerArgs, service)
+	output, err := dockerComposeExec(p.targetDir, repo, dockerArgs...)
+	if err != nil {
+		return mcpToolResult{}, fmt.Errorf("docker compose logs: %w", err)
+	}
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
+}
+
+func logLineLimit(lines string) string {
+	if strings.TrimSpace(lines) == "" {
+		return "100"
+	}
+	return lines
+}
+
+func (p *MCPPlugin) dispatchGetHealth(args map[string]interface{}) (mcpToolResult, error) {
+	repo := toolStringArg(args, "repo")
+	service := toolStringArg(args, "service")
+	if repo == "" || service == "" {
+		return mcpToolResult{}, fmt.Errorf("repo and service are required")
+	}
+	output, err := dockerComposeExec(p.targetDir, repo, "ps", mcpDockerFormatArg, mcpDockerJSONArg, service)
+	if err != nil {
+		return mcpToolResult{}, fmt.Errorf("docker compose ps: %w", err)
+	}
+	containers, ok := parseHealthContainers(output)
+	if !ok {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
+	}
+	if len(containers) == 0 {
+		return mcpToolResult{}, fmt.Errorf("service %q not found in stack %q", service, repo)
+	}
+	return textResult(containers)
+}
+
+func textResultOrRawJSONOutput(output string) (mcpToolResult, error) {
+	var services []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &services); err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: output}}}, nil
+	}
+	return textResult(services)
+}
+
+func parseHealthContainers(output string) ([]map[string]interface{}, bool) {
+	var containers []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &containers); err == nil {
+		return containers, true
+	}
+
+	var single map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &single); err != nil {
+		return nil, false
+	}
+	return []map[string]interface{}{single}, true
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

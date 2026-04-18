@@ -110,61 +110,83 @@ func (p *AuditPlugin) Execute(ctx context.Context, action string, params map[str
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
 
-	limit := 100
-	offset := 0
-	order := "desc"
-	var filter map[string]any
-	var since, until *time.Time
+	query := parseAuditQueryParams(params)
 
-	if params != nil {
-		if l, ok := params["limit"].(int); ok {
-			limit = l
-		} else if l, ok := params["limit"].(float64); ok {
-			limit = int(l)
-		}
-
-		if o, ok := params["offset"].(int); ok {
-			offset = o
-		} else if o, ok := params["offset"].(float64); ok {
-			offset = int(o)
-		}
-
-		if o, ok := params["order"].(string); ok && o != "" {
-			order = o
-		}
-
-		if f, ok := params["filter"].(map[string]any); ok {
-			filter = cloneAuditFilter(f)
-		} else if f, ok := params["filter"].(map[string]string); ok {
-			filter = make(map[string]any, len(f))
-			for key, value := range f {
-				filter[key] = value
-			}
-		}
-
-		if s, ok := params["since"].(time.Time); ok {
-			since = &s
-		} else if s, ok := params["since"].(string); ok && s != "" {
-			if t, err := time.Parse(time.RFC3339, s); err == nil {
-				since = &t
-			}
-		}
-
-		if u, ok := params["until"].(time.Time); ok {
-			until = &u
-		} else if u, ok := params["until"].(string); ok && u != "" {
-			if t, err := time.Parse(time.RFC3339, u); err == nil {
-				until = &t
-			}
-		}
-	}
-
-	events, err := p.store.GetLastEvents(filter, limit, offset, order, since, until)
+	events, err := p.store.GetLastEvents(query.filter, query.limit, query.offset, query.order, query.since, query.until)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get events: %w", err)
 	}
 
 	return events, nil
+}
+
+type auditQueryParams struct {
+	limit  int
+	offset int
+	order  string
+	filter map[string]any
+	since  *time.Time
+	until  *time.Time
+}
+
+func parseAuditQueryParams(params map[string]interface{}) auditQueryParams {
+	query := auditQueryParams{
+		limit: 100,
+		order: "desc",
+	}
+	if params == nil {
+		return query
+	}
+	query.limit = intParam(params, "limit", query.limit)
+	query.offset = intParam(params, "offset", query.offset)
+	query.order = stringParam(params, "order", query.order)
+	query.filter = filterParam(params["filter"])
+	query.since = timeParam(params["since"])
+	query.until = timeParam(params["until"])
+	return query
+}
+
+func intParam(params map[string]interface{}, key string, fallback int) int {
+	if value, ok := params[key].(int); ok {
+		return value
+	}
+	if value, ok := params[key].(float64); ok {
+		return int(value)
+	}
+	return fallback
+}
+
+func stringParam(params map[string]interface{}, key, fallback string) string {
+	if value, ok := params[key].(string); ok && value != "" {
+		return value
+	}
+	return fallback
+}
+
+func filterParam(raw interface{}) map[string]any {
+	if filter, ok := raw.(map[string]any); ok {
+		return cloneAuditFilter(filter)
+	}
+	if filter, ok := raw.(map[string]string); ok {
+		out := make(map[string]any, len(filter))
+		for key, value := range filter {
+			out[key] = value
+		}
+		return out
+	}
+	return nil
+}
+
+func timeParam(raw interface{}) *time.Time {
+	if value, ok := raw.(time.Time); ok {
+		return &value
+	}
+	if value, ok := raw.(string); ok && value != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func cloneAuditFilter(filter map[string]any) map[string]any {
