@@ -4,7 +4,7 @@ git-ops is a lightweight, "GitOps-lite" operator written in Go. It automatically
 
 ## Quick Start
 
-### Path A: Docker (recommended)
+### Docker (recommended)
 
 ```yaml
 services:
@@ -15,6 +15,8 @@ services:
       GITHUB_USERS: your-github-username
       TOPIC_FILTER: homelab
       TARGET_DIR: /stacks
+      CORE_HTTP_ADDR: 0.0.0.0:8080
+      PLUGINS_ALLOW: reconciler,ui,audit
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/stacks:/stacks
@@ -27,35 +29,24 @@ Then run:
 docker compose up -d
 ```
 
-Docker is also the recommended path on Windows and macOS. `git-ops` and its
-plugins are Linux-only binaries, but Docker Desktop runs the container inside a
-Linux VM, so the official image works normally there.
+Docker is also the recommended approach on Windows and macOS, where the native binary is not supported.
 
-### Windows and macOS
+| Plugin | Enable when | Extra config needed |
+| :--- | :--- | :--- |
+| `reconciler` | Always — core deploy engine | none beyond the three required vars |
+| `ui` | You want the web dashboard | `CORE_HTTP_ADDR` |
+| `audit` | You want an event history | none |
+| `image_refresh` | You want automatic image updates | none |
+| `env_forwarder` | You forward env vars to stacks | allowlist in config |
+| `file_forwarder` | You forward host files to stacks | file list in config |
+| `webhook_trigger` | You want to trigger reconcile via HTTP | optional `WEBHOOK_TOKEN` |
+| `notifier_discord` | You want Discord alerts | `DISCORD_WEBHOOK_URL` |
+| `notifier_pushover` | You want Pushover alerts | `NOTIFY_PUSHOVER_TOKEN` and `NOTIFY_PUSHOVER_USER` |
+| `notifier_webhook` | You want generic webhook alerts | `NOTIFY_WEBHOOK_URL` |
+| `google_secret_manager` | You use GCP secrets | Google ADC credentials and `GOOGLE_CLOUD_PROJECT` |
+| `mcp` | You use AI tooling | `MCP_API_KEY` |
 
-Use the Docker path above.
-
-Platform notes:
-
-- Windows: Docker Desktop is the supported path. The container runs on Linux
-  inside Docker Desktop, which satisfies the Go plugin requirement. The Docker
-  socket mount still uses `/var/run/docker.sock` inside the container.
-- macOS: Docker Desktop is also the supported path. The native binary release
-  is not supported.
-- For `TARGET_DIR`, prefer a Docker-managed volume or a Linux/WSL-backed path
-  instead of a translated host filesystem path when possible.
-
-### Path B: Binary
-
-```bash
-curl -sSL https://raw.githubusercontent.com/mywio/git-ops/master/install.sh | sh
-export GITHUB_TOKEN=ghp_your_token
-export GITHUB_USERS=your-github-username
-export TOPIC_FILTER=homelab
-git-ops
-```
-
-See the [full configuration reference](#configuration-env-vars) for all options.
+Add plugins to `PLUGINS_ALLOW` one at a time as you need them.
 
 ## Features
 - **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
@@ -64,11 +55,15 @@ See the [full configuration reference](#configuration-env-vars) for all options.
 
 ## Installation
 
-### Prerequisites
+### Build from source
+
+Building from source requires Linux, Go 1.24+, and for the UI plugin Node.js 20.19+.
+
+#### Prerequisites
 - Go 1.24+
 - Docker & Docker Compose
 
-### Build
+#### Build
 ```bash
 # Build the core binary
 make build
