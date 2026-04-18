@@ -237,6 +237,61 @@ func TestListManagedDeploymentsParsesComposeStatus(t *testing.T) {
 	}
 }
 
+func TestListDeploymentsIncludesUnmanagedRunningContainers(t *testing.T) {
+	targetDir := t.TempDir()
+	repoPath := filepath.Join(targetDir, "acme", "api")
+	require.NoError(t, os.MkdirAll(repoPath, 0755))
+
+	originalListComposePSContainers := listComposePSContainers
+	listComposePSContainers = func(path string) ([]composePSContainer, error) {
+		assert.Equal(t, repoPath, path)
+		return []composePSContainer{
+			{Name: "acme-api-1", State: "running"},
+		}, nil
+	}
+	defer func() {
+		listComposePSContainers = originalListComposePSContainers
+	}()
+
+	originalListDockerContainers := listDockerContainers
+	listDockerContainers = func() ([]dockerPSContainer, error) {
+		return []dockerPSContainer{
+			{ID: "managed", Names: "acme-api-1", Image: "managed:latest", State: "running", Status: "Up 1 minute"},
+			{ID: "unmanaged", Names: "postgres-dev", Image: "postgres:16", State: "running", Status: "Up 2 minutes"},
+		}, nil
+	}
+	defer func() {
+		listDockerContainers = originalListDockerContainers
+	}()
+
+	reconciler := &Reconciler{
+		cfg:    config.Config{TargetDir: targetDir},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	deployments, err := reconciler.listDeployments()
+	require.NoError(t, err)
+	require.Len(t, deployments, 2)
+
+	assert.Equal(t, "git-ops", deployments[0]["source"])
+	assert.Equal(t, "docker", deployments[1]["source"])
+	assert.Equal(t, "postgres-dev", deployments[1]["display_name"])
+	assert.Equal(t, false, deployments[1]["managed"])
+	assert.Equal(t, "postgres-dev", deployments[1]["container"])
+}
+
+func TestParseDockerPSOutputIgnoresMalformedLines(t *testing.T) {
+	out := []byte("{\"Names\":\"db\",\"State\":\"running\"}\nnot-json\n{\"Names\":\"web\",\"State\":\"running\"}\n")
+
+	containers := parseDockerPSOutput(out)
+
+	require.Len(t, containers, 2)
+	assert.Equal(t, []dockerPSContainer{
+		{Names: "db", State: "running"},
+		{Names: "web", State: "running"},
+	}, containers)
+}
+
 func TestParseComposePSOutputIgnoresMalformedLines(t *testing.T) {
 	out := []byte("{\"State\":\"running\"}\nnot-json\n{\"State\":\"exited\"}\n")
 

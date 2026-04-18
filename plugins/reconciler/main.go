@@ -50,6 +50,14 @@ type composePSContainer struct {
 	State   string `json:"State"`
 }
 
+type dockerPSContainer struct {
+	ID     string `json:"ID"`
+	Names  string `json:"Names"`
+	Image  string `json:"Image"`
+	State  string `json:"State"`
+	Status string `json:"Status"`
+}
+
 type composeSpec struct {
 	content          string
 	currentCommitSHA string
@@ -85,6 +93,16 @@ var listComposePSContainers = func(repoPath string) ([]composePSContainer, error
 	}
 
 	return parseComposePSOutput(out), nil
+}
+var listDockerContainers = func() ([]dockerPSContainer, error) {
+	cmd := exec.Command("docker", "ps", "--format", "json")
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return parseDockerPSOutput(out), nil
 }
 var checkDockerComposeAvailable = func() error {
 	cmd := exec.Command("docker", "compose", "version")
@@ -134,11 +152,17 @@ func (r *Reconciler) Execute(ctx context.Context, action string, params map[stri
 		}
 		return true, nil
 	case "list_deployments":
-		// Quick heuristic: return all stacks
-		return r.listManagedDeployments()
+		return r.listDeployments()
 	case "system_info":
 		return r.getSystemInfo()
 	case "stream_logs":
+		if container, _ := params["container"].(string); strings.TrimSpace(container) != "" {
+			lines, _ := params["lines"].(string)
+			if lines == "" {
+				lines = "100"
+			}
+			return r.streamContainerLogs(ctx, container, lines)
+		}
 		owner, _ := params["owner"].(string)
 		repo, _ := params["repo"].(string)
 		lines, _ := params["lines"].(string)
@@ -880,6 +904,11 @@ func (r *Reconciler) listManagedDeployments() ([]map[string]interface{}, error) 
 
 			fullName := fmt.Sprintf("%s/%s", userDir.Name(), repoDir.Name())
 			deployment := map[string]interface{}{
+				"id":               fullName,
+				"kind":             "stack",
+				"source":           "git-ops",
+				"managed":          true,
+				"display_name":     fullName,
 				"owner":            userDir.Name(),
 				"repo":             repoDir.Name(),
 				"path":             repoPath,
@@ -889,6 +918,7 @@ func (r *Reconciler) listManagedDeployments() ([]map[string]interface{}, error) 
 				"execution_stage":  "",
 				"last_error":       "",
 				"history":          []executionSnapshot{},
+				"container_names":  containerNames(containers),
 			}
 			if r.executionState != nil {
 				if snapshot, ok := r.executionState.snapshot(fullName); ok {
@@ -908,6 +938,91 @@ func (r *Reconciler) listManagedDeployments() ([]map[string]interface{}, error) 
 	return deployments, nil
 }
 
+func (r *Reconciler) listDeployments() ([]map[string]interface{}, error) {
+	managed, err := r.listManagedDeployments()
+	if err != nil {
+		return nil, err
+	}
+
+	managedContainers := make(map[string]struct{})
+	for _, deployment := range managed {
+		if names, ok := deployment["container_names"].([]string); ok {
+			for _, name := range names {
+				managedContainers[name] = struct{}{}
+			}
+		}
+		delete(deployment, "container_names")
+	}
+
+	unmanaged, err := r.listUnmanagedContainers(managedContainers)
+	if err != nil {
+		r.logger.Warn("Failed to list unmanaged containers", "error", err)
+	}
+
+	deployments := append(managed, unmanaged...)
+	sort.Slice(deployments, func(i, j int) bool {
+		managedI, _ := deployments[i]["managed"].(bool)
+		managedJ, _ := deployments[j]["managed"].(bool)
+		if managedI != managedJ {
+			return managedI
+		}
+		nameI, _ := deployments[i]["display_name"].(string)
+		nameJ, _ := deployments[j]["display_name"].(string)
+		return nameI < nameJ
+	})
+
+	return deployments, nil
+}
+
+func (r *Reconciler) listUnmanagedContainers(exclude map[string]struct{}) ([]map[string]interface{}, error) {
+	containers, err := listDockerContainers()
+	if err != nil {
+		return nil, err
+	}
+
+	var deployments []map[string]interface{}
+	for _, container := range containers {
+		name := strings.TrimSpace(container.Names)
+		if name == "" {
+			name = strings.TrimSpace(container.ID)
+		}
+		if name == "" {
+			continue
+		}
+		if _, ok := exclude[name]; ok {
+			continue
+		}
+
+		status := strings.TrimSpace(container.State)
+		if status == "" {
+			status = "running"
+		}
+
+		deployments = append(deployments, map[string]interface{}{
+			"id":               "container:" + name,
+			"kind":             "container",
+			"source":           "docker",
+			"managed":          false,
+			"display_name":     name,
+			"owner":            "",
+			"repo":             name,
+			"path":             "",
+			"status":           status,
+			"execution_id":     "",
+			"execution_status": "",
+			"execution_stage":  "",
+			"last_error":       "",
+			"history":          []executionSnapshot{},
+			"container":        name,
+			"container_id":     container.ID,
+			"image":            strings.TrimSpace(container.Image),
+			"docker_status":    strings.TrimSpace(container.Status),
+		})
+	}
+
+	return deployments, nil
+}
+
 func parseComposePSOutput(out []byte) []composePSContainer {
 	var containers []composePSContainer
 
@@ -924,6 +1039,36 @@ func parseComposePSOutput(out []byte) []composePSContainer {
 	}
 
 	return containers
+}
+
+func parseDockerPSOutput(out []byte) []dockerPSContainer {
+	var containers []dockerPSContainer
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var container dockerPSContainer
+		if err := json.Unmarshal([]byte(line), &container); err == nil {
+			containers = append(containers, container)
+		}
+	}
+
+	return containers
+}
+
+func containerNames(containers []composePSContainer) []string {
+	names := make([]string, 0, len(containers))
+	for _, container := range containers {
+		name := strings.TrimSpace(container.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func deploymentStatusFromComposeContainers(containers []composePSContainer) string {
@@ -994,6 +1139,42 @@ func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) 
 			select {
 			case <-ctx.Done():
 				return // Request cancelled (user closed page)
+			case logChan <- scanner.Text():
+			}
+		}
+	}()
+
+	return logChan, nil
+}
+
+func (r *Reconciler) streamContainerLogs(ctx context.Context, container, lines string) (<-chan string, error) {
+	cmd := exec.Command("docker", "logs", "-f", "--tail", lines, container)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	logChan := make(chan string)
+
+	go func() {
+		defer close(logChan)
+		defer func() {
+			if err := cmd.Wait(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				r.logger.Debug("docker logs process exited with error", "container", container, "error", err)
+			}
+		}()
+
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
 			case logChan <- scanner.Text():
 			}
 		}

@@ -78,16 +78,17 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// query params: ?owner=org&repo=app&lines=100
+	// query params: ?owner=org&repo=app&lines=100 or ?container=name&lines=100
 	owner := r.URL.Query().Get("owner")
 	repo := r.URL.Query().Get("repo")
+	container := r.URL.Query().Get("container")
 	lines := r.URL.Query().Get("lines")
 	if lines == "" {
 		lines = "100"
 	}
 
-	if owner == "" || repo == "" {
-		http.Error(w, "owner and repo are required", http.StatusBadRequest)
+	if container == "" && (owner == "" || repo == "") {
+		http.Error(w, "container or owner and repo are required", http.StatusBadRequest)
 		return
 	}
 
@@ -104,9 +105,10 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	deployer := deployers[0] // pick the first one for now
 	params := map[string]interface{}{
-		"owner": owner,
-		"repo":  repo,
-		"lines": lines,
+		"owner":     owner,
+		"repo":      repo,
+		"container": container,
+		"lines":     lines,
 	}
 
 	res, err := deployer.Execute(r.Context(), "stream_logs", params)
