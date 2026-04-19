@@ -36,6 +36,31 @@ go test -race ./...
 go test -cover ./...
 ```
 
+## SonarQube
+
+The repository includes a root
+[`sonar-project.properties`](../sonar-project.properties) file for SonarQube
+or SonarScanner CLI runs.
+
+Typical local flow:
+
+```bash
+go test -covermode=atomic -coverprofile=coverage.out ./...
+sonar-scanner
+```
+
+The config is tuned for this repository shape:
+
+- analyzes the whole repo from the `git-ops/` root
+- treats `*_test.go` files as tests
+- excludes generated or runtime-only paths such as:
+  - `.gocache/`
+  - `bin/`
+  - `plugins/ui/frontend/dist/`
+  - `plugins/mcp/docs/`
+
+Remove `coverage.out` after the scan if you do not want to keep it locally.
+
 Short fuzz runs can be used to sanity-check parser-heavy code paths:
 
 ```bash
