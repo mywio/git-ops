@@ -169,7 +169,7 @@ function App() {
 
             sse.onmessage = (event) => {
                 // Handle escaped newlines
-                const lines = event.data.split(String.raw`\n`).map((line) => ({
+                const lines = event.data.split(String.raw`\n`).map((line: string) => ({
                     id: nextLogID.current++,
                     line,
                 }));
