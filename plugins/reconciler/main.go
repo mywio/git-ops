@@ -21,6 +21,8 @@ import (
 	"github.com/mywio/git-ops/pkg/utils"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"golang.org/x/oauth2"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type Reconciler struct {
@@ -1832,7 +1834,7 @@ func (r *Reconciler) fetchRepoHookScripts(ctx context.Context, deployCtx deployR
 	r.markExecutionRunning(ctx, deployCtx.fullName, core.ExecutionStageHooks)
 	for _, stage := range []string{"pre", "post"} {
 		if err := r.fetchRepoHookScriptsForStage(ctx, *deployCtx.repo.Owner.Login, *deployCtx.repo.Name, stage, deployCtx.spec.repoLocalPath); err != nil {
-			deployCtx.logger.Error(fmt.Sprintf("Global Fetch %s-Hook failed, aborting deploy", strings.Title(stage)), "error", err)
+			deployCtx.logger.Error(fmt.Sprintf("Global Fetch %s-Hook failed, aborting deploy", cases.Title(language.English).String(stage)), "error", err)
 			r.publishDeployEvent(ctx, "deploy_failed", deployCtx.repo, deployFailureResult("failed", err, deployCtx))
 			r.failExecution(ctx, deployCtx.fullName, core.ExecutionStageHooks, err)
 			return false
