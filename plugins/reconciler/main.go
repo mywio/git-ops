@@ -2060,7 +2060,10 @@ func materializeRuntimeFiles(files []core.RuntimeFile) ([]string, func(), error)
 	for _, key := range keys {
 		env = append(env, fmt.Sprintf("%s=%s", key, envToPath[key]))
 	}
-	return env, cleanup, nil
+	// Keep runtime files available after `docker compose up -d` returns. Some
+	// stacks mount these paths into running containers and break if the host-side
+	// files are removed immediately after the deploy command exits.
+	return env, noOpCleanup, nil
 }
 
 func runtimeFileMaterializationSpec(idx int, file core.RuntimeFile) (string, string, os.FileMode, error) {
