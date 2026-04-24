@@ -20,6 +20,7 @@ type Deployment = {
     repo: string;
     path: string;
     status: string;
+    disabled?: boolean;
     container?: string;
     image?: string;
     docker_status?: string;
@@ -96,6 +97,35 @@ function deploymentLabel(dep: Deployment) {
     return dep.repo || 'unknown';
 }
 
+function availableActions(dep: Deployment) {
+    if (dep.managed === false) {
+        return [] as string[];
+    }
+    if (dep.disabled) {
+        return ['enable_stack'];
+    }
+    return ['start_stack', 'stop_stack', 'restart_stack', 'disable_stack', 'reconcile_stack'];
+}
+
+function actionLabel(action: string) {
+    switch (action) {
+        case 'start_stack':
+            return 'Start';
+        case 'stop_stack':
+            return 'Stop';
+        case 'restart_stack':
+            return 'Restart';
+        case 'disable_stack':
+            return 'Disable';
+        case 'enable_stack':
+            return 'Enable';
+        case 'reconcile_stack':
+            return 'Reconcile';
+        default:
+            return action;
+    }
+}
+
 /* --- App Component --- */
 function App() {
     const [activeTab, setActiveTab] = useState(() => tabFromPath(globalThis.location.pathname));
@@ -103,6 +133,8 @@ function App() {
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [plugins, setPlugins] = useState<PluginInfo[]>([]);
     const [loading, setLoading] = useState(false);
+    const [pendingActions, setPendingActions] = useState<Record<string, string>>({});
+    const [flashMessage, setFlashMessage] = useState<string>('');
 
     // Logs state
     const [selectedLogStack, setSelectedLogStack] = useState<Deployment | null>(null);
@@ -145,6 +177,34 @@ function App() {
             console.error("Failed to fetch data:", e);
         }
         setLoading(false);
+    };
+
+    const handleStackAction = async (dep: Deployment, action: string) => {
+        const key = dep.id || `${dep.owner}-${dep.repo}`;
+        setPendingActions(prev => ({ ...prev, [key]: action }));
+        setFlashMessage('');
+        try {
+            const res = await fetch('/api/ui/stacks/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ owner: dep.owner, repo: dep.repo, action }),
+            });
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || `Request failed with status ${res.status}`);
+            }
+            setFlashMessage(`${actionLabel(action)} requested for ${deploymentLabel(dep)}`);
+            await fetchData();
+        } catch (e) {
+            const message = e instanceof Error ? e.message : 'Unknown error';
+            setFlashMessage(`Failed to ${actionLabel(action).toLowerCase()} ${deploymentLabel(dep)}: ${message}`);
+        } finally {
+            setPendingActions(prev => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+            });
+        }
     };
 
     // Log Streamer
@@ -243,6 +303,7 @@ function App() {
                 </header>
 
                 <div className="content-area">
+                    {flashMessage ? <div className="flash-message">{flashMessage}</div> : null}
                     {/* TAB: System Info */}
                     {activeTab === 'system' && (
                         <div className="card grid-card">
@@ -271,6 +332,7 @@ function App() {
                                             <th>Repository</th>
                                             <th>Last Error</th>
                                             <th>Path</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -315,7 +377,29 @@ function App() {
                                                 <td className="error-cell">
                                                     {dep.last_error ? dep.last_error : <span className="text-muted">none</span>}
                                                 </td>
-                                                <td className="text-muted">{dep.path}</td>
+                                                <td className="text-muted">
+                                                    {dep.path}
+                                                    {dep.disabled ? <div className="status-detail disabled-label">Disabled</div> : null}
+                                                </td>
+                                                <td>
+                                                    <div className="action-group">
+                                                        {availableActions(dep).map(action => {
+                                                            const key = dep.id || `${dep.owner}-${dep.repo}`;
+                                                            const pending = pendingActions[key] === action;
+                                                            return (
+                                                                <button
+                                                                    key={action}
+                                                                    className={`action-btn ${action}`}
+                                                                    onClick={() => handleStackAction(dep, action)}
+                                                                    disabled={pending || loading}
+                                                                >
+                                                                    {pending ? 'Working…' : actionLabel(action)}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                        {dep.managed === false ? <span className="text-muted">n/a</span> : null}
+                                                    </div>
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>

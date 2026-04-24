@@ -165,21 +165,26 @@ func (r *Reconciler) Status() core.ServiceStatus {
 
 func (r *Reconciler) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	switch action {
-	case "reconcile_stack":
-		owner, okOwner := params["owner"].(string)
-		repo, okRepo := params["repo"].(string)
-		if !okOwner || !okRepo || owner == "" || repo == "" {
-			return nil, fmt.Errorf("reconcile_stack requires 'owner' and 'repo' string parameters")
+	case "reconcile_stack", "start_stack", "stop_stack", "restart_stack", "disable_stack", "enable_stack":
+		owner, repo, err := requiredRepoParams(action, params)
+		if err != nil {
+			return nil, err
 		}
-
-		forceType, _ := params["force_type"].(string)
 
 		triggerCtx := context.Background()
 		if ctx != nil {
 			triggerCtx = ctx
 		}
 
-		if !r.scheduleReconcileStack(triggerCtx, owner, repo, forceType) {
+		if action == "reconcile_stack" {
+			forceType, _ := params["force_type"].(string)
+			if !r.scheduleReconcileStack(triggerCtx, owner, repo, forceType) {
+				return nil, fmt.Errorf("reconciler is stopping")
+			}
+			return true, nil
+		}
+
+		if !r.scheduleStackControlAction(triggerCtx, owner, repo, action) {
 			return nil, fmt.Errorf("reconciler is stopping")
 		}
 		return true, nil
@@ -205,6 +210,15 @@ func (r *Reconciler) Execute(ctx context.Context, action string, params map[stri
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
+}
+
+func requiredRepoParams(action string, params map[string]interface{}) (string, string, error) {
+	owner, okOwner := params["owner"].(string)
+	repo, okRepo := params["repo"].(string)
+	if !okOwner || !okRepo || strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
+		return "", "", fmt.Errorf("%s requires 'owner' and 'repo' string parameters", action)
+	}
+	return owner, repo, nil
 }
 
 func (r *Reconciler) Config() any {
@@ -240,6 +254,22 @@ func (r *Reconciler) handleReconcileStackEvent(ctx context.Context, event core.I
 	r.logger.Info("Received reconcile_stack event", "source", event.Source, "owner", owner, "repo", repo, "force_type", forceType)
 	if !r.scheduleReconcileStack(ctx, owner, repo, forceType) {
 		r.logger.Info("Skipping reconcile_stack event while stopping", "source", event.Source, "owner", owner, "repo", repo)
+	}
+}
+
+func (r *Reconciler) handleStackControlEvent(action string) core.Listener {
+	return func(ctx context.Context, event core.InternalEvent) {
+		owner, okOwner := event.Details["owner"].(string)
+		repo, okRepo := event.Details["repo"].(string)
+		if !okOwner || !okRepo {
+			r.logger.Warn("stack control event missing owner or repo details", "event", action, "source", event.Source)
+			return
+		}
+
+		r.logger.Info("Received stack control event", "event", action, "source", event.Source, "owner", owner, "repo", repo)
+		if !r.scheduleStackControlAction(ctx, owner, repo, action) {
+			r.logger.Info("Skipping stack control event while stopping", "event", action, "source", event.Source, "owner", owner, "repo", repo)
+		}
 	}
 }
 
@@ -324,6 +354,11 @@ func (r *Reconciler) registerEvents(registry core.PluginRegistry) error {
 
 	registry.Subscribe("reconcile_now", r.handleReconcileNowEvent)
 	registry.Subscribe("reconcile_stack", r.handleReconcileStackEvent)
+	registry.Subscribe("stack_start_requested", r.handleStackControlEvent("start_stack"))
+	registry.Subscribe("stack_stop_requested", r.handleStackControlEvent("stop_stack"))
+	registry.Subscribe("stack_restart_requested", r.handleStackControlEvent("restart_stack"))
+	registry.Subscribe("stack_disable_requested", r.handleStackControlEvent("disable_stack"))
+	registry.Subscribe("stack_enable_requested", r.handleStackControlEvent("enable_stack"))
 	return nil
 }
 
@@ -340,11 +375,62 @@ func reconcilerEventTypes() []core.EventTypeDesc {
 			Name:        "reconcile_stack",
 			Description: "Request reconciliation for a specific stack",
 			PayloadSpec: map[string]core.PayloadField{
-				"owner":      {Type: "string", Description: repoOwnerDescription, Required: true},
-				"repo":       {Type: "string", Description: repoNameDescription, Required: true},
-				"force_type": {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"force_type":   {Type: "string", Description: "Force deploy type: bypass_check, clean_local_state, remove_images, restart_only", Required: false},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
 			},
 		},
+		{
+			Name:        "stack_start_requested",
+			Description: "Request start of an existing local stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
+			},
+		},
+		{
+			Name:        "stack_stop_requested",
+			Description: "Request stop of an existing local stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
+			},
+		},
+		{
+			Name:        "stack_restart_requested",
+			Description: "Request restart of an existing local stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
+			},
+		},
+		{
+			Name:        "stack_disable_requested",
+			Description: "Request disable of a stack and keep it stopped during future reconciles",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
+			},
+		},
+		{
+			Name:        "stack_enable_requested",
+			Description: "Request enable of a previously disabled stack",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":        {Type: "string", Description: repoOwnerDescription, Required: true},
+				"repo":         {Type: "string", Description: repoNameDescription, Required: true},
+				"requested_by": {Type: "string", Description: "Authenticated user who requested the action", Required: false},
+			},
+		},
+		{Name: "stack_started", Description: "Local stack start completed"},
+		{Name: "stack_stopped", Description: "Local stack stop completed"},
+		{Name: "stack_restarted", Description: "Local stack restart completed"},
+		{Name: "stack_disabled", Description: "Stack disabled and stopped"},
+		{Name: "stack_enabled", Description: "Stack enabled for future operations"},
 		{
 			Name:        "deploy_success",
 			Description: "Stack deployed successfully",
@@ -606,6 +692,11 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 			r.logger.Warn("Repo found in both Desired and Removal state, skipping deploy", "full_name", fullName)
 			continue
 		}
+		repoLocalPath := filepath.Join(r.cfg.TargetDir, repo.GetOwner().GetLogin(), repo.GetName())
+		if isStackDisabled(repoLocalPath) {
+			r.logger.Info("Skipping deploy because stack is disabled", "full_name", fullName)
+			continue
+		}
 		r.deployRepo(ctx, fullName, repo, "")
 	}
 }
@@ -648,8 +739,90 @@ func (r *Reconciler) runReconcileStack(ctx context.Context, owner, repo, forceTy
 		return
 	}
 
+	repoLocalPath := filepath.Join(r.cfg.TargetDir, owner, repo)
+	if isStackDisabled(repoLocalPath) {
+		err := fmt.Errorf("stack is disabled")
+		logger.Warn(err.Error(), "owner", owner, "repo", repo)
+		r.failExecution(ctx, fullName, core.ExecutionStageFetch, err)
+		return
+	}
+
 	logger.Info("Targeted stack reconciliation initiated", "force_type", forceType)
 	r.deployRepoWithExecution(ctx, fullName, repository, forceType)
+}
+
+func (r *Reconciler) runStackControlAction(ctx context.Context, owner, repo, action string) {
+	if r.isStopping() {
+		return
+	}
+
+	fullName := fmt.Sprintf("%s/%s", owner, repo)
+	repoLocalPath := filepath.Join(r.cfg.TargetDir, owner, repo)
+	logger := r.logger.With("full_name", fullName, "action", action)
+
+	snapshot, acquired := r.acquireExecution(fullName, owner, repo, action)
+	if !acquired {
+		logger.Warn("Execution already in progress, skipping stack action", "execution_id", snapshot.ExecutionID)
+		return
+	}
+	r.publishExecutionEvent(ctx, snapshot)
+
+	switch action {
+	case "start_stack":
+		if isStackDisabled(repoLocalPath) {
+			err := fmt.Errorf("stack is disabled")
+			logger.Warn(err.Error())
+			r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+			return
+		}
+		if err := r.startStack(ctx, fullName, owner, repo, repoLocalPath, logger); err != nil {
+			logger.Error("Start stack failed", "error", err)
+			return
+		}
+		r.publishStackControlResult(ctx, "stack_started", owner, repo, fullName)
+	case "stop_stack":
+		if err := r.stopStack(ctx, fullName, repoLocalPath); err != nil {
+			logger.Error("Stop stack failed", "error", err)
+			return
+		}
+		r.publishStackControlResult(ctx, "stack_stopped", owner, repo, fullName)
+	case "restart_stack":
+		if isStackDisabled(repoLocalPath) {
+			err := fmt.Errorf("stack is disabled")
+			logger.Warn(err.Error())
+			r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+			return
+		}
+		if err := r.restartStack(ctx, fullName, owner, repo, repoLocalPath, logger); err != nil {
+			logger.Error("Restart stack failed", "error", err)
+			return
+		}
+		r.publishStackControlResult(ctx, "stack_restarted", owner, repo, fullName)
+	case "disable_stack":
+		if err := setStackDisabled(repoLocalPath, true); err != nil {
+			logger.Error("Failed to persist disabled state", "error", err)
+			r.failExecution(ctx, fullName, core.ExecutionStageComposeDown, err)
+			return
+		}
+		if err := r.stopStack(ctx, fullName, repoLocalPath); err != nil {
+			logger.Error("Disable stack stop failed", "error", err)
+			return
+		}
+		r.publishStackControlResult(ctx, "stack_disabled", owner, repo, fullName)
+	case "enable_stack":
+		r.markExecutionRunning(ctx, fullName, core.ExecutionStageRequested)
+		if err := setStackDisabled(repoLocalPath, false); err != nil {
+			logger.Error("Failed to persist enabled state", "error", err)
+			r.failExecution(ctx, fullName, core.ExecutionStageRequested, err)
+			return
+		}
+		r.succeedExecution(ctx, fullName)
+		r.publishStackControlResult(ctx, "stack_enabled", owner, repo, fullName)
+	default:
+		err := fmt.Errorf("unsupported stack control action: %s", action)
+		logger.Error(err.Error())
+		r.failExecution(ctx, fullName, core.ExecutionStageRequested, err)
+	}
 }
 
 func (r *Reconciler) fetchReposInto(ctx context.Context, query string, target map[string]*github.Repository) {
@@ -857,6 +1030,17 @@ func (r *Reconciler) scheduleReconcileStack(ctx context.Context, owner, repo, fo
 	return true
 }
 
+func (r *Reconciler) scheduleStackControlAction(ctx context.Context, owner, repo, action string) bool {
+	if !r.beginWork() {
+		return false
+	}
+	go func() {
+		defer r.wg.Done()
+		r.runStackControlAction(ctx, owner, repo, action)
+	}()
+	return true
+}
+
 func (r *Reconciler) acquireExecution(fullName, owner, repo, trigger string) (executionSnapshot, bool) {
 	if r.executionState == nil {
 		r.executionState = newExecutionStateManager(time.Now)
@@ -984,6 +1168,7 @@ func (r *Reconciler) forEachRepoInUserDir(owner string, fn func(owner, repo, rep
 func (r *Reconciler) buildManagedDeployment(owner, repo, repoPath string) map[string]interface{} {
 	fullName := fmt.Sprintf("%s/%s", owner, repo)
 	status, containers := deploymentStatusAtPath(repoPath)
+	disabled := isStackDisabled(repoPath)
 	deployment := map[string]interface{}{
 		"id":               fullName,
 		"kind":             "stack",
@@ -994,6 +1179,7 @@ func (r *Reconciler) buildManagedDeployment(owner, repo, repoPath string) map[st
 		"repo":             repo,
 		"path":             repoPath,
 		"status":           status,
+		"disabled":         disabled,
 		"execution_id":     "",
 		"execution_status": "",
 		"execution_stage":  "",
@@ -1348,6 +1534,49 @@ func (r *Reconciler) runComposeDown(ctx context.Context, fullName, repoLocalPath
 		return err
 	}
 	return nil
+}
+
+func (r *Reconciler) startStack(ctx context.Context, fullName, owner, repo, repoLocalPath string, logger *slog.Logger) error {
+	secretEnv, runtimeFileEnv, cleanupRuntimeFiles, err := r.prepareComposeEnvironment(ctx, owner, repo, repoLocalPath, logger)
+	if err != nil {
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return err
+	}
+	defer cleanupRuntimeFiles()
+
+	r.markExecutionRunning(ctx, fullName, core.ExecutionStageComposeUp)
+	if err := runComposePreflight(repoLocalPath, runtimeFileEnv); err != nil {
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return err
+	}
+	if err := executeComposeCommand(repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d"); err != nil {
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return err
+	}
+	r.succeedExecution(ctx, fullName)
+	return nil
+}
+
+func (r *Reconciler) stopStack(ctx context.Context, fullName, repoLocalPath string) error {
+	if err := runComposePreflight(repoLocalPath, nil); err != nil {
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeDown, err)
+		return err
+	}
+	if err := r.runComposeDown(ctx, fullName, repoLocalPath, false); err != nil {
+		return err
+	}
+	r.succeedExecution(ctx, fullName)
+	return nil
+}
+
+func (r *Reconciler) restartStack(ctx context.Context, fullName, owner, repo, repoLocalPath string, logger *slog.Logger) error {
+	secretEnv, runtimeFileEnv, cleanupRuntimeFiles, err := r.prepareComposeEnvironment(ctx, owner, repo, repoLocalPath, logger)
+	if err != nil {
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return err
+	}
+	defer cleanupRuntimeFiles()
+	return r.runRestartOnly(ctx, fullName, repoLocalPath, secretEnv, runtimeFileEnv)
 }
 
 func localComposeStateExists(repoLocalPath string) bool {
@@ -2132,6 +2361,20 @@ func (r *Reconciler) publishStackLocked(ctx context.Context, owner, repo, fullNa
 			"full_name":  fullName,
 			"stack_path": stackPath,
 			"lock_file":  lockPath,
+		},
+	})
+}
+
+func (r *Reconciler) publishStackControlResult(ctx context.Context, eventType, owner, repo, fullName string) {
+	r.publish(ctx, core.InternalEvent{
+		Type:    core.EventTypeName(eventType),
+		Source:  "reconciler",
+		Repo:    repo,
+		Message: fmt.Sprintf("Stack action %s completed for %s", eventType, fullName),
+		Details: map[string]interface{}{
+			"owner":     owner,
+			"repo":      repo,
+			"full_name": fullName,
 		},
 	})
 }

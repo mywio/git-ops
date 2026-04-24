@@ -26,6 +26,7 @@ func (p *UIPlugin) registerRoutes() {
 	p.mux.HandleFunc("/api/ui/deployments", p.requireAuth(p.handleDeployments))
 	p.mux.HandleFunc("/api/ui/logs", p.requireAuth(p.handleLogs))
 	p.mux.HandleFunc("/api/ui/system/info", p.requireAuth(p.handleSystemInfo))
+	p.mux.HandleFunc("/api/ui/stacks/action", p.requireAuth(p.handleStackAction))
 	p.mux.HandleFunc("/", p.requireAuth(p.handleRootRedirect))
 	p.mux.HandleFunc("/ui", p.requireAuth(p.handleUIRootRedirect))
 	p.mux.HandleFunc("/ui/", p.requireAuth(p.handleFrontend))
@@ -130,6 +131,80 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "Plugin returned unsupported log format", http.StatusInternalServerError)
+}
+
+type stackActionRequest struct {
+	Owner  string `json:"owner"`
+	Repo   string `json:"repo"`
+	Action string `json:"action"`
+}
+
+func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, uiMethodNotAllowed, http.StatusMethodNotAllowed)
+		return
+	}
+	if p.registry == nil {
+		http.Error(w, "Plugin registry unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var req stackActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	req.Owner = strings.TrimSpace(req.Owner)
+	req.Repo = strings.TrimSpace(req.Repo)
+	req.Action = strings.TrimSpace(req.Action)
+	if req.Owner == "" || req.Repo == "" || req.Action == "" {
+		http.Error(w, "owner, repo, and action are required", http.StatusBadRequest)
+		return
+	}
+
+	eventType, ok := stackActionEventType(req.Action)
+	if !ok {
+		http.Error(w, "unsupported stack action", http.StatusBadRequest)
+		return
+	}
+
+	details := map[string]interface{}{
+		"owner": req.Owner,
+		"repo":  req.Repo,
+	}
+	if user := p.authenticatedUser(r); user != "" {
+		details["requested_by"] = user
+	}
+
+	p.registry.Publish(r.Context(), core.InternalEvent{
+		Type:    core.EventTypeName(eventType),
+		Source:  "ui",
+		Repo:    req.Repo,
+		Message: fmt.Sprintf("Stack action %s requested for %s/%s", req.Action, req.Owner, req.Repo),
+		Details: details,
+	})
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+}
+
+func stackActionEventType(action string) (string, bool) {
+	switch action {
+	case "start_stack":
+		return "stack_start_requested", true
+	case "stop_stack":
+		return "stack_stop_requested", true
+	case "restart_stack":
+		return "stack_restart_requested", true
+	case "disable_stack":
+		return "stack_disable_requested", true
+	case "enable_stack":
+		return "stack_enable_requested", true
+	case "reconcile_stack":
+		return "reconcile_stack", true
+	default:
+		return "", false
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

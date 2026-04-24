@@ -158,6 +158,15 @@ body {
   overflow-y: auto;
 }
 
+.flash-message {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--text-primary);
+}
+
 /* --- Cards & General UI --- */
 .card {
   background-color: var(--bg-secondary);
@@ -298,6 +307,49 @@ body {
   font-size: 0.8rem;
   white-space: normal;
   word-break: break-word;
+}
+
+.disabled-label {
+  color: #fbbf24;
+  margin-top: 6px;
+}
+
+.action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action-btn {
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.action-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.action-btn.disable_stack,
+.action-btn.stop_stack {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.action-btn.reconcile_stack,
+.action-btn.start_stack,
+.action-btn.enable_stack,
+.action-btn.restart_stack {
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 /* --- Logs Viewer --- */

@@ -29,6 +29,10 @@ mcp:
   api_key: "mcp_token"
   target_dir: "./stacks"
 
+ui:
+  disable_auth: false
+  auth_header: "X-Auth-Request-User"
+
 google_secret_manager:
   project_id: "my-gcp-project"
 
