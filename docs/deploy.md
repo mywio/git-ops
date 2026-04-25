@@ -70,6 +70,9 @@ Notes:
 CONFIG_FILE=/etc/git-ops/config.yaml ./bin/git-ops
 ```
 
+For long-running hosts, prefer a dedicated non-root service account that can
+still talk to Docker through the `docker` group.
+
 ## Update
 ```bash
 git pull
@@ -100,8 +103,11 @@ services:
       - SECRET_API_KEY=example
       - DB_PASSWORD=example
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - /etc/git-ops:/etc/git-ops:ro
       - /opt/stacks:/opt/stacks
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   watchtower:
@@ -111,6 +117,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 ```
+
+Notes:
+- The container starts as root only long enough to detect the mounted Docker
+  socket's group id, adds the internal `git-ops` user to that group, and then
+  execs the app as the non-root `git-ops` user.
+- If you do not mount `/var/run/docker.sock`, the container still drops to the
+  non-root user, but Docker operations will naturally be unavailable.
 
 ### Systemd timer (git pull + rebuild)
 This keeps a source checkout updated and rebuilds on a schedule.
@@ -160,6 +173,17 @@ The MCP plugin embeds the `docs/` folder at build time. `make plugins` copies
 `/mcp/docs/` on the MCP HTTP server.
 
 ## Systemd example
+Create a dedicated service account first:
+
+```bash
+sudo groupadd --system git-ops || true
+sudo useradd --system --gid git-ops --home-dir /var/lib/git-ops --create-home \
+  --shell /usr/sbin/nologin git-ops || true
+sudo install -d -m 0750 -o git-ops -g git-ops /var/lib/git-ops
+```
+
+Example unit:
+
 ```ini
 [Unit]
 Description=git-ops
@@ -168,7 +192,10 @@ Wants=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/git-ops
+User=git-ops
+Group=git-ops
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/git-ops
 Environment=CONFIG_FILE=/etc/git-ops/config.yaml
 Environment=SECRET_API_KEY=example
 Environment=DB_PASSWORD=example
@@ -176,10 +203,18 @@ Environment=APP_TOKEN=example
 ExecStart=/opt/git-ops/bin/git-ops
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+Notes:
+- `SupplementaryGroups=docker` lets the non-root process access
+  `/var/run/docker.sock` when that socket is owned by the `docker` group.
+- Ensure `/etc/git-ops/config.yaml` is readable by the `git-ops` user or group.
+- Ensure `target_dir` is writable by `git-ops`.
 
 ## Examples
 - Env Forwarder: `examples/env_forwarder/`

@@ -5,6 +5,9 @@ REPO="mywio/git-ops"
 VERSION="${VERSION:-latest}"
 PREFIX="${PREFIX:-/usr/local}"
 SYSTEMD=0
+SERVICE_USER="${SERVICE_USER:-git-ops}"
+SERVICE_GROUP="${SERVICE_GROUP:-git-ops}"
+STATE_DIR="${STATE_DIR:-/var/lib/git-ops}"
 
 usage() {
     cat <<EOF
@@ -16,6 +19,11 @@ Options:
   --prefix PATH   Install under PATH instead of /usr/local
   --version TAG   Install a specific release tag (default: latest)
   --systemd       Install /etc/systemd/system/git-ops.service
+
+Environment overrides for --systemd:
+  SERVICE_USER    Service account name (default: git-ops)
+  SERVICE_GROUP   Service group name (default: git-ops)
+  STATE_DIR       Working directory for the service (default: /var/lib/git-ops)
 EOF
 }
 
@@ -24,6 +32,41 @@ need_cmd() {
         echo "error: required command not found: $1" >&2
         exit 1
     }
+}
+
+resolve_nologin_shell() {
+    for shell_path in /usr/sbin/nologin /sbin/nologin /bin/false; do
+        if [ -x "$shell_path" ]; then
+            printf '%s\n' "$shell_path"
+            return
+        fi
+    done
+    echo "error: could not find a nologin shell" >&2
+    exit 1
+}
+
+ensure_system_group() {
+    group_name="$1"
+    if getent group "$group_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    groupadd --system "$group_name"
+}
+
+ensure_system_user() {
+    user_name="$1"
+    group_name="$2"
+    home_dir="$3"
+    if id "$user_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    useradd \
+        --system \
+        --gid "$group_name" \
+        --home-dir "$home_dir" \
+        --create-home \
+        --shell "$(resolve_nologin_shell)" \
+        "$user_name"
 }
 
 confirm_overwrite() {
@@ -76,6 +119,9 @@ need_cmd tar
 need_cmd install
 if [ "$SYSTEMD" -eq 1 ]; then
     need_cmd systemctl
+    need_cmd getent
+    need_cmd groupadd
+    need_cmd useradd
 fi
 
 resolve_version() {
@@ -127,6 +173,14 @@ for plugin in "$TMPDIR"/plugins/*.so; do
 done
 
 if [ "$SYSTEMD" -eq 1 ]; then
+    ensure_system_group "$SERVICE_GROUP"
+    ensure_system_user "$SERVICE_USER" "$SERVICE_GROUP" "$STATE_DIR"
+    install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
+
+    if ! getent group docker >/dev/null 2>&1; then
+        echo "warning: docker group does not exist yet; git-ops.service will reference it via SupplementaryGroups=docker" >&2
+    fi
+
     SERVICE_PATH="/etc/systemd/system/git-ops.service"
     confirm_overwrite "$SERVICE_PATH"
     cat > "$SERVICE_PATH" <<EOF
@@ -137,11 +191,17 @@ Wants=docker.service
 
 [Service]
 Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+SupplementaryGroups=docker
+WorkingDirectory=$STATE_DIR
 Environment=CONFIG_FILE=/etc/git-ops/config.yaml
 Environment=PLUGINS_DIR=$PLUGINS_DIR
 ExecStart=$BIN_DIR/git-ops
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
@@ -169,7 +229,9 @@ EOF
 if [ "$SYSTEMD" -eq 1 ]; then
     cat <<EOF
 4. Review /etc/systemd/system/git-ops.service
-5. Then run:
+5. Ensure /etc/git-ops/config.yaml is readable by $SERVICE_USER or group $SERVICE_GROUP.
+6. Ensure TARGET_DIR is writable by $SERVICE_USER (or via ACL/group permissions).
+7. Then run:
    systemctl daemon-reload
    systemctl enable --now git-ops
 EOF

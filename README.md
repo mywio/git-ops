@@ -20,8 +20,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/stacks:/stacks
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 ```
+
+The container starts as root only long enough to detect the Docker socket group,
+then drops to the dedicated `git-ops` user before starting the application.
 
 Then run:
 
@@ -73,6 +78,10 @@ make plugins
 ```
 
 The binary will be in `bin/git-ops` and plugins in `bin/plugins/`.
+
+For systemd deployments, use a dedicated non-root service account with
+`SupplementaryGroups=docker` so `git-ops` can talk to Docker without running as
+root. See `docs/deploy.md`.
 
 Prebuilt binaries are also published as `git-ops-linux-amd64.tar.gz` release assets.
 The official container image is published as `ghcr.io/mywio/git-ops:latest`.
