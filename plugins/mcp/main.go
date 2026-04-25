@@ -180,7 +180,7 @@ func authMiddleware(key string, next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		if bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); bearer == key {
+		if key == strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			next(w, r)
 			return
 		}
