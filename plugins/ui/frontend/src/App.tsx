@@ -104,7 +104,7 @@ function availableActions(dep: Deployment) {
     if (dep.disabled) {
         return ['enable_stack'];
     }
-    return ['start_stack', 'stop_stack', 'restart_stack', 'disable_stack', 'reconcile_stack'];
+    return ['start_stack', 'stop_stack', 'restart_stack', 'disable_stack', 'reconcile_stack', 'refresh_stack_images'];
 }
 
 function actionLabel(action: string) {
@@ -121,6 +121,8 @@ function actionLabel(action: string) {
             return 'Enable';
         case 'reconcile_stack':
             return 'Reconcile';
+        case 'refresh_stack_images':
+            return 'Pull Images';
         default:
             return action;
     }

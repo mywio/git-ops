@@ -38,4 +38,6 @@ const (
 	CapabilityEnableStack Capability = "enable_stack"
 	// CapabilityDisableStack marks plugins that expose disable_stack through Execute.
 	CapabilityDisableStack Capability = "disable_stack"
+	// CapabilityRefreshStackImages marks plugins that expose refresh_stack_images through Execute.
+	CapabilityRefreshStackImages Capability = "refresh_stack_images"
 )

@@ -221,6 +221,8 @@ func stackActionCapability(action string) (core.Capability, bool) {
 		return core.CapabilityEnableStack, true
 	case string(core.CapabilityReconcileStack):
 		return core.CapabilityReconcileStack, true
+	case string(core.CapabilityRefreshStackImages):
+		return core.CapabilityRefreshStackImages, true
 	default:
 		return "", false
 	}

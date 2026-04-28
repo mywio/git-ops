@@ -330,6 +330,7 @@ Current capabilities from `pkg/core/capabilities.go`:
 - `restart_stack`: supports `Execute(ctx, "restart_stack", params)`
 - `enable_stack`: supports `Execute(ctx, "enable_stack", params)`
 - `disable_stack`: supports `Execute(ctx, "disable_stack", params)`
+- `refresh_stack_images`: supports `Execute(ctx, "refresh_stack_images", params)`
 
 Pick the smallest accurate capability set. Capabilities are used by other
 plugins to discover integrations. Only advertise an action capability when the

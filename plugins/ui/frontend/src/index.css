@@ -346,6 +346,7 @@ body {
 }
 
 .action-btn.reconcile_stack,
+.action-btn.refresh_stack_images,
 .action-btn.start_stack,
 .action-btn.enable_stack,
 .action-btn.restart_stack {

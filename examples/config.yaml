@@ -33,6 +33,9 @@ ui:
   disable_auth: false
   auth_header: "X-Auth-Request-User"
 
+compose_refresh:
+  enabled: true
+
 google_secret_manager:
   project_id: "my-gcp-project"
 

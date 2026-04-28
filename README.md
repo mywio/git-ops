@@ -41,6 +41,7 @@ Docker is also the recommended approach on Windows and macOS, where the native b
 | `reconciler` | Always — core deploy engine | none beyond the three required vars |
 | `ui` | You want the web dashboard | `CORE_HTTP_ADDR` |
 | `audit` | You want an event history | none |
+| `compose_refresh` | You want manual pull-and-restart for compose-only stacks | none |
 | `image_refresh` | You want automatic image updates | none |
 | `env_forwarder` | You forward env vars to stacks | allowlist in config |
 | `file_forwarder` | You forward host files to stacks | file list in config |
