@@ -14,29 +14,54 @@ import (
 )
 
 type imageRefreshMockRegistry struct {
-	cfg         map[string]map[string]any
-	subs        map[string]core.Listener
-	registered  []core.EventTypeDesc
+	cfg        map[string]map[string]any
+	subs       map[string]core.Listener
+	registered []core.EventTypeDesc
 }
 
-func (m *imageRefreshMockRegistry) GetPlugin(name string) (core.Plugin, error) { return nil, assert.AnError }
-func (m *imageRefreshMockRegistry) GetPluginsWithCapability(cap core.Capability) []core.Plugin { return nil }
+func (m *imageRefreshMockRegistry) GetPlugin(name string) (core.Plugin, error) {
+	return nil, assert.AnError
+}
+func (m *imageRefreshMockRegistry) GetPluginsWithCapability(cap core.Capability) []core.Plugin {
+	return nil
+}
 func (m *imageRefreshMockRegistry) ListPlugins() []core.Plugin { return nil }
 func (m *imageRefreshMockRegistry) RegisterEventType(desc core.EventTypeDesc) error {
 	m.registered = append(m.registered, desc)
 	return nil
 }
 func (m *imageRefreshMockRegistry) Publish(ctx context.Context, event core.InternalEvent) {}
-func (m *imageRefreshMockRegistry) GetMuxServer() *http.ServeMux { return nil }
+func (m *imageRefreshMockRegistry) GetMuxServer() *http.ServeMux                          { return nil }
 func (m *imageRefreshMockRegistry) Subscribe(pattern string, handler core.Listener) {
-	if m.subs == nil { m.subs = map[string]core.Listener{} }
+	if m.subs == nil {
+		m.subs = map[string]core.Listener{}
+	}
 	m.subs[pattern] = handler
 }
-func (m *imageRefreshMockRegistry) GetHTTPClient() *http.Client { return nil }
+func (m *imageRefreshMockRegistry) GetHTTPClient() *http.Client          { return nil }
 func (m *imageRefreshMockRegistry) GetConfig() map[string]map[string]any { return m.cfg }
 
 type scheduledRequestRecorder struct {
 	requests []refreshJobRequest
+}
+
+func TestImageRefreshPluginAdvertisesSystemInfoCapability(t *testing.T) {
+	plugin := &ImageRefreshPlugin{}
+	assert.Contains(t, plugin.Capabilities(), core.CapabilitySystemInfo)
+	assert.NotContains(t, plugin.Capabilities(), core.CapabilityListDeployments)
+}
+
+func TestImageRefreshPluginExecuteSystemInfo(t *testing.T) {
+	plugin := &ImageRefreshPlugin{enabled: true, retryDelays: []time.Duration{0, time.Minute, 2 * time.Minute}, jobs: &scheduledRequestRecorder{}}
+
+	res, err := plugin.Execute(context.Background(), "system_info", nil)
+	require.NoError(t, err)
+
+	info, ok := res.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, info["enabled"])
+	assert.Equal(t, []float64{0, 1, 2}, info["retry_delays_minutes"])
+	assert.Equal(t, []map[string]interface{}{}, info["active_jobs"])
 }
 
 func (r *scheduledRequestRecorder) Schedule(req refreshJobRequest) error {
@@ -126,5 +151,3 @@ func TestImageRefreshPluginRegistersPhaseOneEventTypes(t *testing.T) {
 	assert.Contains(t, registered["image_refresh_scheduled"].PayloadSpec, "new_commit")
 	assert.Contains(t, registered["image_refresh_scheduled"].PayloadSpec, "stack_path")
 }
-
-

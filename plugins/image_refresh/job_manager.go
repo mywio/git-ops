@@ -168,6 +168,38 @@ func (m *jobManager) Stop() {
 	m.cancel()
 }
 
+func (m *jobManager) Snapshot() []map[string]interface{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	snapshots := make([]map[string]interface{}, 0, len(m.jobs))
+	for key, state := range m.jobs {
+		req := state.request
+		nextDelay := time.Duration(0)
+		if state.attemptIndex >= 0 && state.attemptIndex < len(req.RetryDelays) {
+			nextDelay = req.RetryDelays[state.attemptIndex]
+		}
+		snapshot := map[string]interface{}{
+			"full_name":           key.FullName,
+			"stack_path":          key.StackPath,
+			"owner":               req.Owner,
+			"repo":                req.Repo,
+			"old_commit":          req.OldCommit,
+			"new_commit":          req.NewCommit,
+			"attempt":             state.attemptIndex + 1,
+			"retry_delay":         nextDelay.String(),
+			"retry_delay_minutes": nextDelay.Minutes(),
+			"running":             state.running,
+			"pending_superseded":  state.pending != nil,
+		}
+		if state.pending != nil {
+			snapshot["pending_new_commit"] = state.pending.NewCommit
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots
+}
+
 func (m *jobManager) scheduleAttemptLocked(key refreshJobKey, state *jobState, req refreshJobRequest, attemptIndex int) int {
 	state.request = req
 	state.attemptIndex = attemptIndex

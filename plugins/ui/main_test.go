@@ -9,12 +9,32 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/mywio/git-ops/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type uiActionTestPlugin struct {
+	capabilities []core.Capability
+	action       string
+	params       map[string]interface{}
+}
+
+func (p *uiActionTestPlugin) Name() string                    { return "action_test" }
+func (p *uiActionTestPlugin) Description() string             { return "action test plugin" }
+func (p *uiActionTestPlugin) Capabilities() []core.Capability { return p.capabilities }
+func (p *uiActionTestPlugin) Status() core.ServiceStatus      { return core.StatusHealthy }
+func (p *uiActionTestPlugin) Init(context.Context, *slog.Logger, core.PluginRegistry) error {
+	return nil
+}
+func (p *uiActionTestPlugin) Start(context.Context) error { return nil }
+func (p *uiActionTestPlugin) Stop(context.Context) error  { return nil }
+func (p *uiActionTestPlugin) Execute(_ context.Context, action string, params map[string]interface{}) (interface{}, error) {
+	p.action = action
+	p.params = params
+	return true, nil
+}
 
 func TestUIPlugin(t *testing.T) {
 	// Verify Plugin variable implements interface
@@ -109,18 +129,15 @@ func TestUIPluginCanDisableAuth(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
-func TestUIPluginPublishesStackActionEvent(t *testing.T) {
+func TestUIPluginExecutesStackActionCapability(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
+	actionPlugin := &uiActionTestPlugin{capabilities: []core.Capability{core.CapabilityRestartStack}}
+	mgr.Register(actionPlugin)
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))
-
-	events := make(chan core.InternalEvent, 1)
-	mgr.Subscribe("stack_restart_requested", func(_ context.Context, event core.InternalEvent) {
-		events <- event
-	})
 
 	body, err := json.Marshal(map[string]string{
 		"owner":  "acme",
@@ -137,16 +154,10 @@ func TestUIPluginPublishesStackActionEvent(t *testing.T) {
 	mgr.GetMuxServer().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusAccepted, rr.Code)
-
-	select {
-	case event := <-events:
-		assert.Equal(t, core.EventTypeName("stack_restart_requested"), event.Type)
-		assert.Equal(t, "acme", event.Details["owner"])
-		assert.Equal(t, "api", event.Details["repo"])
-		assert.Equal(t, "alice", event.Details["requested_by"])
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stack action event")
-	}
+	assert.Equal(t, "restart_stack", actionPlugin.action)
+	assert.Equal(t, "acme", actionPlugin.params["owner"])
+	assert.Equal(t, "api", actionPlugin.params["repo"])
+	assert.Equal(t, "alice", actionPlugin.params["requested_by"])
 }
 
 func TestUIPluginRejectsUnknownStackAction(t *testing.T) {

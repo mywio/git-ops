@@ -52,7 +52,7 @@ func (p *ImageRefreshPlugin) Description() string {
 }
 
 func (p *ImageRefreshPlugin) Capabilities() []core.Capability {
-	return []core.Capability{core.CapabilitySystem}
+	return []core.Capability{core.CapabilitySystemInfo}
 }
 
 func (p *ImageRefreshPlugin) Status() core.ServiceStatus {
@@ -147,7 +147,28 @@ func (p *ImageRefreshPlugin) Stop(ctx context.Context) error {
 }
 
 func (p *ImageRefreshPlugin) Execute(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
-	return nil, fmt.Errorf("unknown action: %s", action)
+	switch action {
+	case string(core.CapabilitySystemInfo):
+		return p.systemInfo(), nil
+	default:
+		return nil, fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+func (p *ImageRefreshPlugin) systemInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":              p.enabled,
+		"retry_delays_minutes": retryDelayMinutes(p.retryDelays),
+		"active_jobs":          p.activeJobSnapshots(),
+	}
+}
+
+func (p *ImageRefreshPlugin) activeJobSnapshots() []map[string]interface{} {
+	manager, ok := p.jobs.(*jobManager)
+	if !ok || manager == nil {
+		return []map[string]interface{}{}
+	}
+	return manager.Snapshot()
 }
 
 func (p *ImageRefreshPlugin) handleCommitChanged(ctx context.Context, event core.InternalEvent) {
@@ -241,6 +262,14 @@ func retryDurations(minutes []float64) []time.Duration {
 		delays = append(delays, time.Duration(value*float64(time.Minute)))
 	}
 	return delays
+}
+
+func retryDelayMinutes(delays []time.Duration) []float64 {
+	minutes := make([]float64, 0, len(delays))
+	for _, delay := range delays {
+		minutes = append(minutes, delay.Minutes())
+	}
+	return minutes
 }
 
 func stringDetail(event core.InternalEvent, key string) string {

@@ -296,19 +296,18 @@ default:
 
 Use `Execute` for plugin-local actions, not as a substitute for events.
 
-Rough conventions by capability:
+Action capabilities are callable contracts. If a plugin advertises an action
+capability, callers may safely invoke `Execute` with the capability string as the
+action name.
 
-- `DEPLOYER`
-  - often exposes actions like `list_deployments`, `system_info`, `stream_logs`
-- `SYSTEM`
-  - often exposes read-only operational data
-- `NOTIFIER`
-  - often reacts to events rather than exposing many Execute actions
-- `UI` / `API`
-  - often register HTTP routes instead of relying heavily on `Execute`
+For example, a plugin advertising `list_deployments` must support:
 
-There is no strict capability-to-action contract enforced by the core runtime,
-so consistency comes from existing patterns and documentation.
+```go
+plugin.Execute(ctx, string(core.CapabilityListDeployments), params)
+```
+
+Non-action capabilities such as `NOTIFIER`, `UI`, and `API` remain descriptive
+integration tags and do not imply an `Execute` action.
 
 ## Capability Reference
 
@@ -322,11 +321,19 @@ Current capabilities from `pkg/core/capabilities.go`:
 - `SECRETS`: returns secret key/value pairs
 - `RUNTIME_FILES`: materializes files for compose execution
 - `AUDIT`: records or exposes event history
-- `DEPLOYER`: deploys or manages stacks
-- `SYSTEM`: provides core operational behavior
+- `system_info`: supports `Execute(ctx, "system_info", params)`
+- `list_deployments`: supports `Execute(ctx, "list_deployments", params)`
+- `stream_logs`: supports `Execute(ctx, "stream_logs", params)`
+- `reconcile_stack`: supports `Execute(ctx, "reconcile_stack", params)`
+- `start_stack`: supports `Execute(ctx, "start_stack", params)`
+- `stop_stack`: supports `Execute(ctx, "stop_stack", params)`
+- `restart_stack`: supports `Execute(ctx, "restart_stack", params)`
+- `enable_stack`: supports `Execute(ctx, "enable_stack", params)`
+- `disable_stack`: supports `Execute(ctx, "disable_stack", params)`
 
 Pick the smallest accurate capability set. Capabilities are used by other
-plugins to discover integrations.
+plugins to discover integrations. Only advertise an action capability when the
+plugin owns that behavior and implements the matching `Execute` action.
 
 ## Build Instructions
 

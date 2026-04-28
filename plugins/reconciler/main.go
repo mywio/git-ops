@@ -153,7 +153,17 @@ func (r *Reconciler) Description() string {
 }
 
 func (r *Reconciler) Capabilities() []core.Capability {
-	return []core.Capability{core.CapabilityDeployer, core.CapabilitySystem}
+	return []core.Capability{
+		core.CapabilityReconcileStack,
+		core.CapabilityStartStack,
+		core.CapabilityStopStack,
+		core.CapabilityRestartStack,
+		core.CapabilityDisableStack,
+		core.CapabilityEnableStack,
+		core.CapabilityListDeployments,
+		core.CapabilitySystemInfo,
+		core.CapabilityStreamLogs,
+	}
 }
 
 func (r *Reconciler) Status() core.ServiceStatus {

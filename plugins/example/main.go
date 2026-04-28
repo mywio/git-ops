@@ -36,7 +36,7 @@ func (p *ExamplePlugin) Description() string {
 }
 
 func (p *ExamplePlugin) Capabilities() []core.Capability {
-	return []core.Capability{core.CapabilitySystem}
+	return nil
 }
 
 func (p *ExamplePlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {

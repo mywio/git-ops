@@ -2,7 +2,7 @@
 
 Commit-triggered image refresh plugin. It listens for reconciler `stack_commit_changed` events and retries `docker compose pull` for stacks whose git commit advanced without a compose-file change.
 
-Capabilities: `system`
+Capabilities: `system_info`
 
 Config section: `image_refresh`
 
@@ -26,6 +26,12 @@ image_refresh:
 ```
 
 `retry_delays_minutes` is authoritative for the retry schedule.
+
+## Actions
+
+| Action | Description |
+| :--- | :--- |
+| `system_info` | Returns enabled state, retry schedule, and active refresh jobs |
 
 ## Events
 

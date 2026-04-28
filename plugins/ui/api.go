@@ -38,7 +38,7 @@ func (p *UIPlugin) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deployers := p.registry.GetPluginsWithCapability(core.CapabilityDeployer)
+	deployers := p.registry.GetPluginsWithCapability(core.CapabilityListDeployments)
 	var allDeployments []interface{}
 
 	for _, deployer := range deployers {
@@ -66,7 +66,7 @@ func (p *UIPlugin) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	systems := p.registry.GetPluginsWithCapability(core.CapabilitySystem)
+	systems := p.registry.GetPluginsWithCapability(core.CapabilitySystemInfo)
 	info := make(map[string]interface{})
 
 	for _, sys := range systems {
@@ -101,13 +101,12 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deployers := p.registry.GetPluginsWithCapability(core.CapabilityDeployer)
+	deployers := p.registry.GetPluginsWithCapability(core.CapabilityStreamLogs)
 	if len(deployers) == 0 {
-		http.Error(w, "No deployer plugins available", http.StatusNotFound)
+		http.Error(w, "No log streaming plugins available", http.StatusNotFound)
 		return
 	}
 
-	deployer := deployers[0] // pick the first one for now
 	params := map[string]interface{}{
 		"owner":     owner,
 		"repo":      repo,
@@ -115,19 +114,29 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"lines":     lines,
 	}
 
-	res, err := deployer.Execute(r.Context(), "stream_logs", params)
-	if err != nil {
-		p.logger.Error("Failed to stream logs from plugin", "plugin", deployer.Name(), "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	var lastErr error
+	for _, deployer := range deployers {
+		res, err := deployer.Execute(r.Context(), "stream_logs", params)
+		if err != nil {
+			lastErr = err
+			p.logger.Debug("Failed to stream logs from plugin", "plugin", deployer.Name(), "error", err)
+			continue
+		}
 
-	if logStr, logChan, ok := parseLogsResult(res); ok {
-		if logChan == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"logs": logStr})
+		if logStr, logChan, ok := parseLogsResult(res); ok {
+			if logChan == nil {
+				writeJSON(w, http.StatusOK, map[string]string{"logs": logStr})
+				return
+			}
+			p.streamLogChannel(w, r, logChan)
 			return
 		}
-		p.streamLogChannel(w, r, logChan)
+		lastErr = fmt.Errorf("plugin %s returned unsupported log format", deployer.Name())
+	}
+
+	if lastErr != nil {
+		p.logger.Error("Failed to stream logs from deployer plugins", "error", lastErr)
+		http.Error(w, lastErr.Error(), http.StatusInternalServerError)
 		return
 	}
 	http.Error(w, "Plugin returned unsupported log format", http.StatusInternalServerError)
@@ -163,45 +172,55 @@ func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventType, ok := stackActionEventType(req.Action)
+	capability, ok := stackActionCapability(req.Action)
 	if !ok {
 		http.Error(w, "unsupported stack action", http.StatusBadRequest)
 		return
 	}
 
-	details := map[string]interface{}{
+	plugins := p.registry.GetPluginsWithCapability(capability)
+	if len(plugins) == 0 {
+		http.Error(w, fmt.Sprintf("no plugin supports %s", req.Action), http.StatusNotFound)
+		return
+	}
+
+	params := map[string]interface{}{
 		"owner": req.Owner,
 		"repo":  req.Repo,
 	}
 	if user := p.authenticatedUser(r); user != "" {
-		details["requested_by"] = user
+		params["requested_by"] = user
 	}
 
-	p.registry.Publish(r.Context(), core.InternalEvent{
-		Type:    core.EventTypeName(eventType),
-		Source:  "ui",
-		Repo:    req.Repo,
-		Message: fmt.Sprintf("Stack action %s requested for %s/%s", req.Action, req.Owner, req.Repo),
-		Details: details,
-	})
+	var lastErr error
+	for _, plugin := range plugins {
+		if _, err := plugin.Execute(r.Context(), req.Action, params); err != nil {
+			lastErr = err
+			p.logger.Debug("Failed to execute stack action plugin", "plugin", plugin.Name(), "action", req.Action, "error", err)
+			continue
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+		return
+	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+	p.logger.Error("Failed to execute stack action", "action", req.Action, "error", lastErr)
+	http.Error(w, lastErr.Error(), http.StatusInternalServerError)
 }
 
-func stackActionEventType(action string) (string, bool) {
+func stackActionCapability(action string) (core.Capability, bool) {
 	switch action {
-	case "start_stack":
-		return "stack_start_requested", true
-	case "stop_stack":
-		return "stack_stop_requested", true
-	case "restart_stack":
-		return "stack_restart_requested", true
-	case "disable_stack":
-		return "stack_disable_requested", true
-	case "enable_stack":
-		return "stack_enable_requested", true
-	case "reconcile_stack":
-		return "reconcile_stack", true
+	case string(core.CapabilityStartStack):
+		return core.CapabilityStartStack, true
+	case string(core.CapabilityStopStack):
+		return core.CapabilityStopStack, true
+	case string(core.CapabilityRestartStack):
+		return core.CapabilityRestartStack, true
+	case string(core.CapabilityDisableStack):
+		return core.CapabilityDisableStack, true
+	case string(core.CapabilityEnableStack):
+		return core.CapabilityEnableStack, true
+	case string(core.CapabilityReconcileStack):
+		return core.CapabilityReconcileStack, true
 	default:
 		return "", false
 	}
