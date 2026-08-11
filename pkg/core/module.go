@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -223,10 +224,6 @@ func (m *ModuleManager) ListPlugins() []Plugin {
 func (m *ModuleManager) LoadPlugins(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			m.logger.Warn("Plugins directory not found", "dir", dir)
-			return nil
-		}
 		return fmt.Errorf("failed to read plugins dir: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -240,6 +237,9 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 		m.logger.Info("Plugin allowlist active", "allowed", allowlist)
 	}
 
+	var loadErrors []error
+	discovered := make(map[string]struct{})
+	loaded := make(map[string]struct{})
 	for _, entry := range entries {
 		if !isPluginFile(entry) {
 			continue
@@ -250,17 +250,29 @@ func (m *ModuleManager) LoadPlugins(dir string) error {
 			m.logger.Info("Skipping plugin (not in allowlist)", "plugin", name, "allowlist", allowlist)
 			continue
 		}
+		discovered[name] = struct{}{}
 
 		path := filepath.Join(dir, entry.Name())
-		plug, ok := m.loadPluginFile(path)
-		if !ok {
+		plug, err := m.loadPluginFile(path)
+		if err != nil {
+			loadErrors = append(loadErrors, err)
 			continue
 		}
 
 		m.Register(plug)
+		loaded[name] = struct{}{}
 		m.logger.Info("Plugin loaded successfully", "name", plug.Name())
 	}
-	return nil
+
+	for _, name := range allowlist {
+		if _, found := discovered[name]; !found {
+			loadErrors = append(loadErrors, fmt.Errorf("allowed plugin %q not found in %s", name, dir))
+		}
+	}
+	if len(loaded) == 0 && len(loadErrors) == 0 {
+		loadErrors = append(loadErrors, fmt.Errorf("no plugins selected from %s", dir))
+	}
+	return errors.Join(loadErrors...)
 }
 
 func (m *ModuleManager) pluginAllowlist() []string {
@@ -373,28 +385,28 @@ func pluginAllowed(name string, allowset map[string]struct{}) bool {
 	return ok
 }
 
-func (m *ModuleManager) loadPluginFile(path string) (Plugin, bool) {
+func (m *ModuleManager) loadPluginFile(path string) (Plugin, error) {
 	m.logger.Info("Loading plugin", "path", path)
 
 	opened, err := plugin.Open(path)
 	if err != nil {
 		m.logger.Error("Failed to open plugin", "path", path, "error", err)
-		return nil, false
+		return nil, fmt.Errorf("open plugin %s: %w", path, err)
 	}
 
 	sym, err := opened.Lookup("Plugin")
 	if err != nil {
 		m.logger.Error("Plugin symbol not found", "path", path, "error", err)
-		return nil, false
+		return nil, fmt.Errorf("lookup Plugin symbol in %s: %w", path, err)
 	}
 
 	plug, ok := resolvePluginSymbol(sym)
 	if !ok || plug == nil {
 		m.logger.Error("Plugin has wrong type (must implement core.Plugin)", "path", path)
-		return nil, false
+		return nil, fmt.Errorf("plugin %s has wrong type", path)
 	}
 
-	return plug, true
+	return plug, nil
 }
 
 func pluginFromValue(val reflect.Value) (Plugin, bool) {

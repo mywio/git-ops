@@ -37,6 +37,7 @@ func main() {
 	cfgMapFile, err := config.LoadConfigFile(configPath)
 	if err != nil {
 		logger.Error("Failed to load config file", "path", configPath, "error", err)
+		os.Exit(1)
 	}
 	cfgMap := config.MergeConfigMap(cfgMapFile, cfgMapEnv)
 
@@ -57,6 +58,7 @@ func main() {
 	}
 	if err := mgr.LoadPlugins(pluginsDir); err != nil {
 		logger.Error("Failed to load plugins", "error", err)
+		os.Exit(1)
 	}
 
 	// Register Modules (if any core modules remain)

@@ -97,6 +97,7 @@ func TestPluginsAPIDetail(t *testing.T) {
 func TestHealthAPI(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := NewModuleManager(logger)
+	mgr.Register(&testPlugin{name: "test"})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
@@ -108,4 +109,17 @@ func TestHealthAPI(t *testing.T) {
 	err := json.NewDecoder(rr.Body).Decode(&out)
 	assert.NoError(t, err)
 	assert.Equal(t, "ok", out["status"])
+}
+
+func TestHealthAPIReportsNotReadyWithoutPlugins(t *testing.T) {
+	mgr := NewModuleManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+
+	mgr.handleHealth(rr, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	var out map[string]string
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&out))
+	assert.Equal(t, "not_ready", out["status"])
 }

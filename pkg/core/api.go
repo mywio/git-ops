@@ -29,6 +29,10 @@ func (m *ModuleManager) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": errMethodNotAllowed})
 		return
 	}
+	if len(m.ListPlugins()) == 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "error": "no plugins loaded"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

@@ -152,7 +152,7 @@ func TestModuleManagerBrokerIsInstanceScoped(t *testing.T) {
 	assert.EqualValues(t, 0, atomic.LoadInt32(&fired2), "mgr2 should not receive mgr1 events")
 }
 
-func TestLoadPluginsLoadsAllowedPlugin(t *testing.T) {
+func TestLoadPluginsReturnsErrorForBrokenAllowedPlugin(t *testing.T) {
 	var logBuffer bytes.Buffer
 	mgr := NewModuleManager(slog.New(slog.NewJSONHandler(&logBuffer, nil)))
 	mgr.SetConfig(map[string]map[string]any{
@@ -162,13 +162,13 @@ func TestLoadPluginsLoadsAllowedPlugin(t *testing.T) {
 	dir := t.TempDir()
 	writeFakePluginFile(t, dir, "alpha")
 
-	require.NoError(t, mgr.LoadPlugins(dir))
+	require.Error(t, mgr.LoadPlugins(dir))
 	assertLogContains(t, logBuffer.Bytes(), "Plugin allowlist active")
 	assertLogContains(t, logBuffer.Bytes(), "Loading plugin")
 	assertLogFieldValue(t, logBuffer.Bytes(), "path", filepath.Join(dir, "alpha.so"))
 }
 
-func TestLoadPluginsSkipsPluginNotInAllowlist(t *testing.T) {
+func TestLoadPluginsReportsMissingAllowedPlugin(t *testing.T) {
 	var logBuffer bytes.Buffer
 	mgr := NewModuleManager(slog.New(slog.NewJSONHandler(&logBuffer, nil)))
 	mgr.SetConfig(map[string]map[string]any{
@@ -178,12 +178,14 @@ func TestLoadPluginsSkipsPluginNotInAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	writeFakePluginFile(t, dir, "alpha")
 
-	require.NoError(t, mgr.LoadPlugins(dir))
+	err := mgr.LoadPlugins(dir)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `allowed plugin "beta" not found`)
 	assert.Empty(t, mgr.ListPlugins())
 	assertLogContains(t, logBuffer.Bytes(), "Skipping plugin (not in allowlist)")
 }
 
-func TestLoadPluginsLoadsAllWhenAllowlistEmpty(t *testing.T) {
+func TestLoadPluginsReturnsErrorsForBrokenPluginsWithoutAllowlist(t *testing.T) {
 	var logBuffer bytes.Buffer
 	mgr := NewModuleManager(slog.New(slog.NewJSONHandler(&logBuffer, nil)))
 	mgr.SetConfig(map[string]map[string]any{
@@ -194,7 +196,7 @@ func TestLoadPluginsLoadsAllWhenAllowlistEmpty(t *testing.T) {
 	writeFakePluginFile(t, dir, "alpha")
 	writeFakePluginFile(t, dir, "beta")
 
-	require.NoError(t, mgr.LoadPlugins(dir))
+	require.Error(t, mgr.LoadPlugins(dir))
 	assertLogFieldValue(t, logBuffer.Bytes(), "path", filepath.Join(dir, "alpha.so"))
 	assertLogFieldValue(t, logBuffer.Bytes(), "path", filepath.Join(dir, "beta.so"))
 }
@@ -211,11 +213,25 @@ func TestLoadPluginsParsesAllowlistFromEnv(t *testing.T) {
 	writeFakePluginFile(t, dir, "beta")
 	writeFakePluginFile(t, dir, "gamma")
 
-	require.NoError(t, mgr.LoadPlugins(dir))
+	require.Error(t, mgr.LoadPlugins(dir))
 	assertLogContains(t, logBuffer.Bytes(), "Plugin allowlist active")
 	assertLogFieldValue(t, logBuffer.Bytes(), "path", filepath.Join(dir, "alpha.so"))
 	assertLogFieldValue(t, logBuffer.Bytes(), "path", filepath.Join(dir, "beta.so"))
 	assertLogFieldValue(t, logBuffer.Bytes(), "plugin", "gamma")
+}
+
+func TestLoadPluginsFailsWhenDirectoryIsMissing(t *testing.T) {
+	mgr := NewModuleManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := mgr.LoadPlugins(filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to read plugins dir")
+}
+
+func TestLoadPluginsFailsWhenNoPluginsAreSelected(t *testing.T) {
+	mgr := NewModuleManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := mgr.LoadPlugins(t.TempDir())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no plugins selected")
 }
 
 func assertLogContains(t *testing.T, data []byte, msg string) {

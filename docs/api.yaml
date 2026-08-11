@@ -20,10 +20,10 @@ paths:
   /health:
     get:
       summary: Health check
-      description: Returns a simple unauthenticated health signal for upstream probes.
+      description: Returns an unauthenticated readiness signal once at least one plugin is loaded.
       responses:
         "200":
-          description: Service is reachable
+          description: Service is ready and has loaded plugins
           content:
             application/json:
               schema:
@@ -36,6 +36,12 @@ paths:
                   - status
         "405":
           description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: No plugins were loaded; the service is not ready
           content:
             application/json:
               schema:
