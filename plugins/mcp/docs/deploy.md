@@ -70,6 +70,42 @@ Notes:
 CONFIG_FILE=/etc/git-ops/config.yaml ./bin/git-ops
 ```
 
+For long-running hosts, prefer a dedicated non-root service account that can
+still talk to Docker through the `docker` group.
+
+## Adopt an existing Compose project
+
+The Deployments UI groups unmanaged containers using Docker Compose's project
+labels and marks those groups as adoption candidates. Discovery is read-only:
+GHOps does not take control of a running project until a matching GitHub
+repository is configured for reconciliation.
+
+Before adopting a project:
+
+1. Record the Compose project name, working directory, config files, bind
+   mounts, named volumes, environment inputs, and secrets shown by the existing
+   deployment. Back up stateful data.
+2. Create a repository under an owner listed in `core.users` and add one of the
+   topics listed in `core.topic`.
+3. Put a self-contained `compose.yaml` or `docker-compose.yml` at the repository
+   root. The reconciler downloads the Compose file and hook files; it does not
+   clone the complete repository. Replace relative build contexts and relative
+   bind mounts with published images, absolute host paths, or runtime files
+   supplied by a forwarding plugin.
+4. Set the Compose top-level `name` to the exact value shown for the candidate
+   group. Preserving the project name and service names lets Compose identify
+   the existing containers and volumes instead of creating a parallel project.
+5. Let the normal sync discover the repository or request a targeted reconcile.
+   Verify container health, networks, mounts, and persistent data before
+   changing or removing the old working directory.
+
+Standalone Docker containers do not have enough Compose metadata for automatic
+adoption. Describe them in a new Compose repository first, then migrate them as
+a planned replacement.
+
+Do not commit secrets to the repository. Continue to supply them through the
+configured secret, environment, or file-forwarding plugins.
+
 ## Update
 ```bash
 git pull
@@ -95,11 +131,16 @@ services:
     image: ghcr.io/mywio/git-ops:latest
     environment:
       - CONFIG_FILE=/etc/git-ops/config.yaml
+      - CORE_HTTP_ADDR=0.0.0.0:8080
+      - PLUGINS_ALLOW=reconciler,ui,audit
       - SECRET_API_KEY=example
       - DB_PASSWORD=example
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - /etc/git-ops:/etc/git-ops:ro
       - /opt/stacks:/opt/stacks
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   watchtower:
@@ -109,6 +150,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 ```
+
+Notes:
+- The container starts as root only long enough to detect the mounted Docker
+  socket's group id, adds the internal `git-ops` user to that group, and then
+  execs the app as the non-root `git-ops` user.
+- If you do not mount `/var/run/docker.sock`, the container still drops to the
+  non-root user, but Docker operations will naturally be unavailable.
 
 ### Systemd timer (git pull + rebuild)
 This keeps a source checkout updated and rebuilds on a schedule.
@@ -158,6 +206,17 @@ The MCP plugin embeds the `docs/` folder at build time. `make plugins` copies
 `/mcp/docs/` on the MCP HTTP server.
 
 ## Systemd example
+Create a dedicated service account first:
+
+```bash
+sudo groupadd --system git-ops || true
+sudo useradd --system --gid git-ops --home-dir /var/lib/git-ops --create-home \
+  --shell /usr/sbin/nologin git-ops || true
+sudo install -d -m 0750 -o git-ops -g git-ops /var/lib/git-ops
+```
+
+Example unit:
+
 ```ini
 [Unit]
 Description=git-ops
@@ -166,7 +225,10 @@ Wants=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/git-ops
+User=git-ops
+Group=git-ops
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/git-ops
 Environment=CONFIG_FILE=/etc/git-ops/config.yaml
 Environment=SECRET_API_KEY=example
 Environment=DB_PASSWORD=example
@@ -174,10 +236,18 @@ Environment=APP_TOKEN=example
 ExecStart=/opt/git-ops/bin/git-ops
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+Notes:
+- `SupplementaryGroups=docker` lets the non-root process access
+  `/var/run/docker.sock` when that socket is owned by the `docker` group.
+- Ensure `/etc/git-ops/config.yaml` is readable by the `git-ops` user or group.
+- Ensure `target_dir` is writable by `git-ops`.
 
 ## Examples
 - Env Forwarder: `examples/env_forwarder/`
