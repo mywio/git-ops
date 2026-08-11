@@ -144,6 +144,10 @@ var checkDockerComposeAvailable = func() error {
 	return nil
 }
 
+var newLogCommand = func(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "docker", args...)
+}
+
 func (r *Reconciler) Name() string {
 	return "reconciler"
 }
@@ -1405,11 +1409,14 @@ func (r *Reconciler) getSystemInfo() (map[string]interface{}, error) {
 }
 
 func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) (<-chan string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	repoPath, err := core.ResolveStackPath(r.cfg.TargetDir, owner, repo)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("docker", "compose", "logs", "-f", "--tail", lines)
+	cmd := newLogCommand(ctx, "compose", "logs", "-f", "--tail", lines)
 	cmd.Dir = repoPath
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -1448,7 +1455,10 @@ func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) 
 }
 
 func (r *Reconciler) streamContainerLogs(ctx context.Context, container, lines string) (<-chan string, error) {
-	cmd := exec.Command("docker", "logs", "-f", "--tail", lines, container)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := newLogCommand(ctx, "logs", "-f", "--tail", lines, container)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
