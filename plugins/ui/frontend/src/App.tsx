@@ -439,7 +439,7 @@ function App() {
                                                 <div className="adoption-guide">
                                                     <strong>Adopt this Compose project without duplicating its containers</strong>
                                                     <ol>
-                                                        <li>Copy {sample.compose_files || 'the Compose file'} and its required assets into a GitHub repository owned by a configured GitHub user.</li>
+                                                        <li>Put a self-contained copy of {sample.compose_files || 'the Compose file'} in a GitHub repository owned by a configured GitHub user. GHOps fetches the Compose file and hooks, not the full checkout, so use published images and explicitly managed runtime files.</li>
                                                         <li>Keep the Compose project identity by adding <code>name: {sample.compose_project || group.name}</code> at the top level.</li>
                                                         <li>Add a configured deployment topic to the repository, then let GHOps discover it or request Reconcile.</li>
                                                         <li>Confirm the services are healthy here. Keep {group.path} until any bind-mounted files or data have been migrated explicitly.</li>
