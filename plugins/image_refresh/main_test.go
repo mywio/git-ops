@@ -73,6 +73,7 @@ func TestImageRefreshPluginIgnoresComposeChangingCommitEvents(t *testing.T) {
 	registry := &imageRefreshMockRegistry{cfg: map[string]map[string]any{"image_refresh": {"enabled": true, "retry_delays_minutes": []any{0.0, 1.0}}}}
 	plugin := &ImageRefreshPlugin{jobs: &scheduledRequestRecorder{}}
 	require.NoError(t, plugin.Init(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), registry))
+	require.NotNil(t, registry.subs["stack_commit_changed"])
 	require.NoError(t, plugin.Start(context.Background()))
 
 	handler := registry.subs["stack_commit_changed"]
@@ -88,6 +89,7 @@ func TestImageRefreshPluginSchedulesJobForComposeUnchangedCommitEvent(t *testing
 	recorder := &scheduledRequestRecorder{}
 	plugin := &ImageRefreshPlugin{jobs: recorder}
 	require.NoError(t, plugin.Init(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), registry))
+	require.NotNil(t, registry.subs["stack_commit_changed"])
 	require.NoError(t, plugin.Start(context.Background()))
 
 	handler := registry.subs["stack_commit_changed"]

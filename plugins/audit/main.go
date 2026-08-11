@@ -72,13 +72,13 @@ func (p *AuditPlugin) Init(ctx context.Context, logger *slog.Logger, registry co
 		p.logger.Info("Initializing memory audit store")
 		p.store = newMemoryStore()
 	}
+	p.registry.Subscribe("*", p.handleEvent)
 
 	return nil
 }
 
 func (p *AuditPlugin) Start(ctx context.Context) error {
-	p.logger.Info("Starting audit plugin and subscribing to all events")
-	p.registry.Subscribe("*", p.handleEvent)
+	p.logger.Info("Starting audit plugin")
 	return nil
 }
 

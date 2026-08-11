@@ -61,6 +61,7 @@ func (p *ExamplePlugin) Init(ctx context.Context, logger *slog.Logger, registry 
 		}); err != nil {
 			return fmt.Errorf("register example_event: %w", err)
 		}
+		registry.Subscribe("reconcile_now", p.handleReconcileNow)
 	}
 
 	p.enabled = p.cfg.Enabled
@@ -68,11 +69,6 @@ func (p *ExamplePlugin) Init(ctx context.Context, logger *slog.Logger, registry 
 }
 
 func (p *ExamplePlugin) Start(ctx context.Context) error {
-	// Subscribe here, not in Init, so config validation in Init stays independent
-	// of event bus readiness.
-	if p.registry != nil {
-		p.registry.Subscribe("reconcile_now", p.handleReconcileNow)
-	}
 	return nil
 }
 

@@ -70,7 +70,7 @@ func TestModuleManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, mock.initCalled.Load())
 
-	mgr.Start(ctx)
+	require.NoError(t, mgr.Start(ctx))
 	// Wait a bit for goroutine
 	time.Sleep(100 * time.Millisecond)
 	assert.True(t, mock.startCalled.Load())
@@ -93,7 +93,7 @@ func TestModuleManagerStartLogsActivePlugins(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(ctx)
+	require.NoError(t, mgr.Start(ctx))
 	time.Sleep(100 * time.Millisecond)
 
 	decoder := json.NewDecoder(bytes.NewReader(logBuffer.Bytes()))
@@ -112,6 +112,30 @@ func TestModuleManagerStartLogsActivePlugins(t *testing.T) {
 	}
 
 	assert.True(t, found, "expected active plugin log entry")
+}
+
+type startFailureModule struct {
+	MockModule
+	err error
+}
+
+func (m *startFailureModule) Start(context.Context) error {
+	m.startCalled.Store(true)
+	return m.err
+}
+
+func TestModuleManagerStartStopsAfterFailure(t *testing.T) {
+	mgr := NewModuleManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	failing := &startFailureModule{MockModule: MockModule{name: "failing"}, err: assert.AnError}
+	next := &MockModule{name: "next"}
+	mgr.Register(failing)
+	mgr.Register(next)
+
+	err := mgr.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to start module failing")
+	assert.True(t, failing.startCalled.Load())
+	assert.False(t, next.startCalled.Load())
 }
 
 type lockedBuffer struct {

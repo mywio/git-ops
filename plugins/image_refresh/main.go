@@ -86,6 +86,7 @@ func (p *ImageRefreshPlugin) Init(ctx context.Context, logger *slog.Logger, regi
 				return fmt.Errorf("register event type %s: %w", desc.Name, err)
 			}
 		}
+		registry.Subscribe("stack_commit_changed", p.handleCommitChanged)
 	}
 
 	return nil
@@ -132,10 +133,6 @@ func (p *ImageRefreshPlugin) ensureJobManager(ctx context.Context, logger *slog.
 }
 
 func (p *ImageRefreshPlugin) Start(ctx context.Context) error {
-	if p.registry == nil {
-		return nil
-	}
-	p.registry.Subscribe("stack_commit_changed", p.handleCommitChanged)
 	return nil
 }
 

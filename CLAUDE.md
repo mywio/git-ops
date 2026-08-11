@@ -56,5 +56,5 @@ go test ./plugins/reconciler
 - Plugins must export `var Plugin core.Plugin = &MyPlugin{}`
 - Multi-file plugins must be built with `*.go`, not only `main.go`
 - Register event types in `Init()`
-- Subscribe to events in `Start()`
+- Subscribe to events in `Init()` so every consumer is ready before startup publishers run
 - Use `core.Secret` in `Config()` for redacted config exposure

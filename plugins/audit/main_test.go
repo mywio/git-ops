@@ -242,6 +242,7 @@ func TestAuditPlugin(t *testing.T) {
 	p := &AuditPlugin{}
 	err := p.Init(context.Background(), logger, registry)
 	require.NoError(t, err)
+	require.NotNil(t, registry.subs["*"])
 
 	err = p.Start(context.Background())
 	require.NoError(t, err)

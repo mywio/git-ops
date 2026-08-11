@@ -108,17 +108,13 @@ func (p *MyPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.
         }); err != nil {
             return fmt.Errorf("register my_plugin_event: %w", err)
         }
+        registry.Subscribe("some_event", p.handleEvent)
     }
 
     return nil
 }
 
 func (p *MyPlugin) Start(ctx context.Context) error {
-    // Subscribe here, not in Init, so config validation in Init stays independent
-    // of event bus readiness.
-    if p.registry != nil {
-        p.registry.Subscribe("some_event", p.handleEvent)
-    }
     return nil
 }
 
@@ -162,7 +158,7 @@ This template shows the current repo conventions:
 - store `logger` and `registry` on the struct
 - load config in `Init`
 - register event types in `Init`
-- subscribe in `Start`
+- subscribe in `Init` before any plugin can publish startup events
 - use `Config() any` for UI-safe config exposure
 - wrap secrets with `core.Secret`
 
@@ -245,8 +241,9 @@ Current event catalog: [EVENTS.md](EVENTS.md)
 
 ## Subscription Pattern
 
-Subscribe in `Start()`, not `Init()`, so plugin initialization stays focused on
-configuration and setup.
+Subscribe in `Init()`. `ModuleManager` initializes every plugin before it starts
+any of them, which guarantees consumers are registered before startup publishers
+can emit events.
 
 Examples:
 

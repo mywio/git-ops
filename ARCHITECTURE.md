@@ -35,7 +35,8 @@ Startup flow:
 4. `ModuleManager.LoadPlugins` opens `.so` files from the configured plugins
    directory and looks up the exported `Plugin` symbol.
 5. `ModuleManager.Init` calls each plugin’s `Init(ctx, logger, registry)`.
-6. `ModuleManager.Start` starts the HTTP server and then starts each plugin.
+6. `ModuleManager.Start` starts each plugin in registration order and exposes the
+   HTTP server after startup succeeds.
 7. `main.go` waits for `SIGINT`/`SIGTERM` and calls `ModuleManager.Stop`.
 
 Shutdown is reverse-order by module registration so plugins can depend on shared
@@ -103,7 +104,7 @@ Event primitives:
 Flow:
 
 1. Plugins register event types in `Init()`.
-2. Plugins subscribe to exact event names or wildcard patterns.
+2. Plugins subscribe to exact event names or wildcard patterns in `Init()`.
 3. Plugins publish events through `registry.Publish(ctx, event)`.
 4. `ModuleManager` validates required payload fields and dispatches matching
    listeners asynchronously.

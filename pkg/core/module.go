@@ -438,9 +438,16 @@ func (m *ModuleManager) Init(ctx context.Context) error {
 	return nil
 }
 
-// Start starts the shared HTTP server and then starts all registered modules.
-func (m *ModuleManager) Start(ctx context.Context) {
-	m.startHTTPServer()
+// Start starts all registered modules in registration order, then exposes the
+// shared HTTP server. Modules must register event subscriptions during Init so
+// all consumers are ready before any Start method can publish an event.
+func (m *ModuleManager) Start(ctx context.Context) error {
+	for _, mod := range m.modules {
+		m.logger.Info("Starting module", "module", mod.Name())
+		if err := mod.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start module %s: %w", mod.Name(), err)
+		}
+	}
 	for _, plug := range m.ListPlugins() {
 		m.logger.Info("Active plugin",
 			"name", plug.Name(),
@@ -448,14 +455,8 @@ func (m *ModuleManager) Start(ctx context.Context) {
 			"status", plug.Status(),
 		)
 	}
-	for _, mod := range m.modules {
-		go func(mod Module) {
-			m.logger.Info("Starting module", "module", mod.Name())
-			if err := mod.Start(ctx); err != nil {
-				m.logger.Error("Module failed", "module", mod.Name(), "error", err)
-			}
-		}(mod)
-	}
+	m.startHTTPServer()
+	return nil
 }
 
 // Stop first stops accepting HTTP work, then stops all modules in reverse

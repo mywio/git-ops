@@ -73,7 +73,10 @@ func main() {
 	}
 
 	// Start Modules
-	mgr.Start(ctx)
+	if err := mgr.Start(ctx); err != nil {
+		logger.Error("Failed to start modules", "error", err)
+		os.Exit(1)
+	}
 
 	// Wait for Signal
 	sigChan := make(chan os.Signal, 1)
