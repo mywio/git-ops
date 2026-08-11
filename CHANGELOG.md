@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.0.0](https://github.com/mywio/git-ops/compare/v1.0.0...v2.0.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** CapabilitySystem and CapabilityDeployer were removed. Plugins now advertise exact Execute actions such as system_info, list_deployments, stream_logs, and stack actions.
+
+### Features
+
+* add stack control actions to reconciler and UI ([307c43e](https://github.com/mywio/git-ops/commit/307c43eeb29efd50fb84bf144c13add836a6c0a9))
+* add ui deep links and health endpoint ([c44fc54](https://github.com/mywio/git-ops/commit/c44fc540a4bbcddc568c6299a5aa781ebb2dd639))
+* **core:** use action capabilities for plugin execution ([2b14fe0](https://github.com/mywio/git-ops/commit/2b14fe08669a381946f1a3992c20d3a9ec6320c7))
+* **plugins:** add compose refresh action ([fccb02c](https://github.com/mywio/git-ops/commit/fccb02c336941f57f1a891daeb87917f29f9ac56))
+* **reconciler:** expose deployment groups ([e7a5825](https://github.com/mywio/git-ops/commit/e7a5825fe83228533548dd835b5c9aa52a4a91f5))
+* require ui auth header by default ([d48fbd9](https://github.com/mywio/git-ops/commit/d48fbd92509246ba0e5dac878c5a668e00577127))
+* **ui:** group deployments by source ([2521a88](https://github.com/mywio/git-ops/commit/2521a886778d47bb203612f4c17f32a07dad2aa9))
+
+
+### Bug Fixes
+
+* **config:** parse UI auth trust environment ([a82ddc9](https://github.com/mywio/git-ops/commit/a82ddc93942eabc00af55f4b37273c7a1a7a23e8))
+* **core:** bound graceful shutdown ([447a1c0](https://github.com/mywio/git-ops/commit/447a1c01de969ced5872cf10bb8afc965f658119))
+* **core:** fail closed when plugins cannot load ([180bd3e](https://github.com/mywio/git-ops/commit/180bd3e66f85e5770a35308c00015d25afd97b79))
+* **core:** order startup event subscriptions ([8598fcb](https://github.com/mywio/git-ops/commit/8598fcb3b74e5d4c6c1744da2f1d884bc52ec807))
+* fix for file deletion ([eff4f67](https://github.com/mywio/git-ops/commit/eff4f677b538ac614928b890faa978fbacebc480))
+* **reconciler:** cancel log stream processes ([702c822](https://github.com/mywio/git-ops/commit/702c822c3918907bb5c0affc28eafefd7720b3e8))
+* **reconciler:** load stack env for live logs ([5465de3](https://github.com/mywio/git-ops/commit/5465de3f1e8ca09f43a067a239c6083cfebb9ce3))
+* **reconciler:** recover unchanged stopped stacks ([c61e31f](https://github.com/mywio/git-ops/commit/c61e31f5e3210b3cb5b12d6af2605a8920fbc341))
+* redact reconciler token in config view ([2d072d9](https://github.com/mywio/git-ops/commit/2d072d994abe5e11aea9cb166123553b0e38c936))
+* replace deprecated strings title usage ([f792b37](https://github.com/mywio/git-ops/commit/f792b37856e70acc37fc85bc9054da160797133d))
+* restore loader and hook compatibility ([e5215aa](https://github.com/mywio/git-ops/commit/e5215aa676651d3a6c1a5f9e7de84b7c394b131b))
+* restore ui frontend build under strict types ([9326552](https://github.com/mywio/git-ops/commit/9326552f9134939d042f6dddb6e5d5e5fa0a6eb3))
+* **security:** contain stack paths under target dir ([61ecf80](https://github.com/mywio/git-ops/commit/61ecf80ad4e47a5204a68b06c6ac4b8d6c16e761))
+* **ui:** clarify compose adoption requirements ([41d5dea](https://github.com/mywio/git-ops/commit/41d5deaa52af5c06a56eefef52947cb7ce7e5f2f))
+* **ui:** verify proxy authentication sessions ([cc363b4](https://github.com/mywio/git-ops/commit/cc363b4b08bbaa1219497097f03ed20f7203a98d))
+* unnecessary variable declaration ([eb5b022](https://github.com/mywio/git-ops/commit/eb5b0225e3380dc42edb3a971ef8d4dae6eecf08))
+
+
+### Documentation
+
+* **deploy:** add compose adoption workflow ([a31cff4](https://github.com/mywio/git-ops/commit/a31cff4570fc3db476636676bf12f5597c8c2f38))
+* link runtime architecture to parent docs ([ef0a142](https://github.com/mywio/git-ops/commit/ef0a142d70980d357e100d534d644d64f17f528d))
+* **mcp:** sync embedded guides ([f85d794](https://github.com/mywio/git-ops/commit/f85d794ddc843a91ba666807c5ff10f16b11ef25))
+* move maintenance notes out of readme ([3d179d5](https://github.com/mywio/git-ops/commit/3d179d5a1301dfe7a633b41ed1d7e3024347adfc))
+
 ## 1.0.0 (2026-04-18)
 
 
