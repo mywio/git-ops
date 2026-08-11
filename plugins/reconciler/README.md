@@ -61,7 +61,7 @@ When `compose_changed=true`, the reconciler already handled the compose deployme
 
 | Action | Parameters | Description |
 | :--- | :--- | :--- |
-| `list_deployments` | - | Returns all locally managed stacks with status |
+| `list_deployments` | - | Returns managed stacks and running Docker containers with Compose grouping and adoption metadata |
 | `system_info` | - | Returns Docker daemon info |
 | `stream_logs` | `owner`, `repo`, `lines` | Streams `docker compose logs` as a channel of strings |
 | `reconcile_stack` | `owner`, `repo`, `force_type` | Triggers a targeted reconciliation |
@@ -75,3 +75,14 @@ When `compose_changed=true`, the reconciler already handled the compose deployme
 | `clean_local_state` | Delete the local compose file and `.deploy` folder before deploying |
 | `remove_images` | Run `docker compose down --rmi all` before deploying |
 | `restart_only` | Run `docker compose restart` (skips file download and change detection) |
+
+## Deployment grouping and adoption
+
+Managed stacks are grouped by GitHub owner. Running containers outside those
+stacks are grouped by the Docker Compose project, working-directory, config-file,
+and service labels. Containers without Compose labels are placed in a standalone
+Docker group.
+
+Compose groups are reported as adoption candidates, but discovery is read-only.
+See [the deployment guide](../../docs/deploy.md#adopt-an-existing-compose-project)
+for the migration requirements and data-safety checklist.

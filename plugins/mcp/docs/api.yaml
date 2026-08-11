@@ -82,10 +82,11 @@ paths:
 
   /api/ui/deployments:
     get:
-      summary: List managed stacks
+      summary: List deployments
       description: |
-        Returns locally managed stacks aggregated from deployer plugins, including
-        runtime status and deployment execution metadata when available.
+        Returns managed stacks and detected running Docker containers aggregated
+        from deployer plugins, including grouping, runtime, Compose adoption, and
+        deployment execution metadata when available.
       responses:
         "200":
           description: Deployment list
@@ -246,6 +247,30 @@ components:
     Deployment:
       type: object
       properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [stack, container]
+        source:
+          type: string
+          enum: [git-ops, docker]
+        managed:
+          type: boolean
+        display_name:
+          type: string
+        group_id:
+          type: string
+          description: Stable grouping key for the current deployment discovery result
+        group_name:
+          type: string
+          description: GitHub owner, Docker Compose project, or standalone-container label
+        group_kind:
+          type: string
+          enum: [git-ops, compose, docker]
+        group_path:
+          type: string
+          description: Managed owner directory or detected Compose working directory
         owner:
           type: string
         repo:
@@ -266,6 +291,26 @@ components:
           type: string
         last_error:
           type: string
+        container:
+          type: string
+          description: Docker container name for unmanaged deployments
+        container_id:
+          type: string
+        image:
+          type: string
+        docker_status:
+          type: string
+        compose_project:
+          type: string
+        compose_service:
+          type: string
+        compose_files:
+          type: string
+          description: Config-file label reported by Docker Compose
+        adoption_status:
+          type: string
+          enum: [candidate, unsupported]
+          description: Candidate means Compose metadata is available; adoption remains an explicit GitOps migration
         history:
           type: array
           items:

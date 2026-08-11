@@ -71,12 +71,18 @@ use these path rules:
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/ui/deployments` | Lists all locally managed stacks with runtime status and deployment execution metadata |
+| `GET` | `/api/ui/deployments` | Lists managed stacks and running Docker containers with runtime, grouping, Compose, and adoption metadata |
 | `GET` | `/api/ui/system/info` | Returns Docker daemon info |
 | `GET` | `/api/ui/logs?owner=&repo=&lines=` | Streams managed stack logs via SSE |
 | `GET` | `/api/ui/logs?container=&lines=` | Streams unmanaged container logs via SSE |
 
 The frontend dashboard SPA is served at `/ui/*`, and `/` redirects to `/ui/system`.
+
+The Deployments and Live Logs views group managed stacks by GitHub owner,
+unmanaged Compose containers by Compose project, and containers without Compose
+labels under Standalone containers. Compose groups include a read-only adoption
+checklist; management actions remain unavailable until the project is migrated
+into the normal GitOps repository workflow.
 
 Example config:
 
