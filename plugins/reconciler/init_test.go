@@ -165,6 +165,95 @@ func TestDetectComposeChangeLogsFullAdditionForDryRunFirstDeploy(t *testing.T) {
 	assert.Contains(t, logBuffer.String(), "+     image: nginx:latest")
 }
 
+func TestDetectComposeChangeRecoversStoppedUnchangedStackWithPersistedEnvironment(t *testing.T) {
+	repoPath := t.TempDir()
+	composeContent := "services:\n  app:\n    image: nginx:latest\n    environment:\n      APP_KEY: ${APP_KEY}\n"
+	composePath := filepath.Join(repoPath, "compose.yaml")
+	require.NoError(t, os.WriteFile(composePath, []byte(composeContent), 0o644))
+	require.NoError(t, persistComposeEnv(repoPath, map[string]string{"APP_KEY": "persisted-value"}))
+
+	originalListComposePSContainers := listComposePSContainers
+	originalComposeCommand := executeComposeCommand
+	t.Cleanup(func() {
+		listComposePSContainers = originalListComposePSContainers
+		executeComposeCommand = originalComposeCommand
+	})
+	listComposePSContainers = func(path string) ([]composePSContainer, error) {
+		assert.Equal(t, repoPath, path)
+		return []composePSContainer{{Name: "app-1", State: "exited"}}, nil
+	}
+
+	composeCalled := false
+	executeComposeCommand = func(path string, cmdEnv, runtimeFileEnv []string, args ...string) error {
+		composeCalled = true
+		assert.Equal(t, repoPath, path)
+		assert.Contains(t, cmdEnv, "APP_KEY=persisted-value")
+		assert.Empty(t, runtimeFileEnv)
+		assert.Equal(t, []string{"up", "-d", "--remove-orphans"}, args)
+		return nil
+	}
+
+	state := newExecutionStateManager(time.Now)
+	reconciler := &Reconciler{
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		executionState: state,
+		commitTracker:  newCommitTracker(),
+	}
+	_, acquired := state.acquire("acme/api", "acme", "api", "node-a", "reconcile")
+	require.True(t, acquired)
+
+	repo := &github.Repository{Name: github.String("api"), Owner: &github.User{Login: github.String("acme")}}
+	spec := composeSpec{content: composeContent, currentCommitSHA: "abc123", repoLocalPath: repoPath, filePath: composePath}
+
+	continued := reconciler.detectComposeChange(context.Background(), "acme/api", repo, spec, "", reconciler.logger)
+
+	assert.False(t, continued)
+	assert.True(t, composeCalled)
+	snapshot, ok := state.snapshot("acme/api")
+	require.True(t, ok)
+	assert.Equal(t, core.ExecutionStatusSucceeded, snapshot.Status)
+	assert.Equal(t, core.ExecutionStageComplete, snapshot.Stage)
+}
+
+func TestDetectComposeChangeDoesNotReapplyHealthyUnchangedStack(t *testing.T) {
+	repoPath := t.TempDir()
+	composeContent := "services:\n  app:\n    image: nginx:latest\n"
+	composePath := filepath.Join(repoPath, "compose.yaml")
+	require.NoError(t, os.WriteFile(composePath, []byte(composeContent), 0o644))
+
+	originalListComposePSContainers := listComposePSContainers
+	originalComposeCommand := executeComposeCommand
+	t.Cleanup(func() {
+		listComposePSContainers = originalListComposePSContainers
+		executeComposeCommand = originalComposeCommand
+	})
+	listComposePSContainers = func(string) ([]composePSContainer, error) {
+		return []composePSContainer{{Name: "app-1", State: "running"}}, nil
+	}
+	executeComposeCommand = func(string, []string, []string, ...string) error {
+		t.Fatal("healthy unchanged stack must not be reapplied")
+		return nil
+	}
+
+	state := newExecutionStateManager(time.Now)
+	reconciler := &Reconciler{
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		executionState: state,
+		commitTracker:  newCommitTracker(),
+	}
+	_, acquired := state.acquire("acme/api", "acme", "api", "node-a", "reconcile")
+	require.True(t, acquired)
+	repo := &github.Repository{Name: github.String("api"), Owner: &github.User{Login: github.String("acme")}}
+	spec := composeSpec{content: composeContent, currentCommitSHA: "abc123", repoLocalPath: repoPath, filePath: composePath}
+
+	continued := reconciler.detectComposeChange(context.Background(), "acme/api", repo, spec, "", reconciler.logger)
+
+	assert.False(t, continued)
+	snapshot, ok := state.snapshot("acme/api")
+	require.True(t, ok)
+	assert.Equal(t, core.ExecutionStatusSucceeded, snapshot.Status)
+}
+
 func TestDeployRepoWithExecutionSkipsLockedStack(t *testing.T) {
 	server, client := newComposeSpecTestServer(t, map[string]string{
 		"compose.yaml": "services:\n  app:\n    image: nginx:latest\n",

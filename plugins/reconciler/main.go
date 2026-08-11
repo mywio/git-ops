@@ -2012,7 +2012,7 @@ func (r *Reconciler) handleRestartOnly(ctx context.Context, fullName string, rep
 func (r *Reconciler) detectComposeChange(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, forceType string, logger *slog.Logger) bool {
 	existing, _ := os.ReadFile(spec.filePath)
 	if string(existing) == spec.content && forceType == "" {
-		r.completeSuccessfulStack(ctx, fullName, repo, spec.repoLocalPath, spec.currentCommitSHA, false)
+		r.completeOrRecoverUnchangedStack(ctx, fullName, repo, spec, logger)
 		return false
 	}
 
@@ -2030,6 +2030,43 @@ func (r *Reconciler) detectComposeChange(ctx context.Context, fullName string, r
 	}
 
 	return true
+}
+
+func (r *Reconciler) completeOrRecoverUnchangedStack(ctx context.Context, fullName string, repo *github.Repository, spec composeSpec, logger *slog.Logger) {
+	containers, statusErr := listComposePSContainers(spec.repoLocalPath)
+	status := "unknown"
+	if statusErr == nil {
+		status = deploymentStatusFromComposeContainers(containers)
+	}
+	if status == "running" {
+		r.completeSuccessfulStack(ctx, fullName, repo, spec.repoLocalPath, spec.currentCommitSHA, false)
+		return
+	}
+
+	logger.Warn("Unchanged stack is not fully running; reapplying compose state", "runtime_status", status, "error", statusErr)
+	secretEnv, runtimeFileEnv, cleanupRuntimeFiles, err := r.prepareComposeEnvironment(ctx, repo.GetOwner().GetLogin(), repo.GetName(), spec.repoLocalPath, logger)
+	if err != nil {
+		logger.Error("Failed to prepare compose environment for recovery", "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return
+	}
+	defer cleanupRuntimeFiles()
+
+	r.warnOnComposeEnvPersistenceRisks(ctx, repo, spec.content, secretEnv, logger)
+	r.markExecutionRunning(ctx, fullName, core.ExecutionStageComposeUp)
+	if err := runComposePreflight(spec.repoLocalPath, runtimeFileEnv); err != nil {
+		logger.Error("Recovery preflight failed", "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return
+	}
+	if err := executeComposeCommand(spec.repoLocalPath, secretEnv, runtimeFileEnv, "up", "-d", composeRemoveOrphansFlag); err != nil {
+		logger.Error("Failed to recover unchanged stack", "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageComposeUp, err)
+		return
+	}
+
+	logger.Info("Recovered unchanged stack", "previous_runtime_status", status)
+	r.completeSuccessfulStack(ctx, fullName, repo, spec.repoLocalPath, spec.currentCommitSHA, false)
 }
 
 func formatDryRunComposeDiff(existing, next string) string {
