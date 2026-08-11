@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
     Activity,
+    ChevronDown,
+    ChevronRight,
     Terminal,
     Settings,
     Layers,
@@ -16,6 +18,10 @@ type Deployment = {
     source?: string;
     managed?: boolean;
     display_name?: string;
+    group_id?: string;
+    group_name?: string;
+    group_kind?: string;
+    group_path?: string;
     owner: string;
     repo: string;
     path: string;
@@ -24,6 +30,10 @@ type Deployment = {
     container?: string;
     image?: string;
     docker_status?: string;
+    compose_project?: string;
+    compose_service?: string;
+    compose_files?: string;
+    adoption_status?: string;
     execution_status?: string;
     execution_stage?: string;
     last_error?: string;
@@ -36,6 +46,14 @@ type ExecutionHistoryEntry = {
     Stage: string;
     LastError: string;
     UpdatedAt: string;
+};
+
+type DeploymentGroup = {
+    id: string;
+    name: string;
+    kind: string;
+    path: string;
+    deployments: Deployment[];
 };
 
 type PluginInfo = {
@@ -128,6 +146,56 @@ function actionLabel(action: string) {
     }
 }
 
+function groupDeployments(deployments: Deployment[]) {
+    const groups = new Map<string, DeploymentGroup>();
+
+    deployments.forEach((deployment) => {
+        const fallbackID = deployment.managed === false ? 'docker-standalone' : `git-ops-owner:${deployment.owner || 'unknown'}`;
+        const id = deployment.group_id || fallbackID;
+        const existing = groups.get(id);
+        if (existing) {
+            existing.deployments.push(deployment);
+            return;
+        }
+
+        groups.set(id, {
+            id,
+            name: deployment.group_name || deployment.owner || 'Standalone containers',
+            kind: deployment.group_kind || (deployment.managed === false ? 'docker' : 'git-ops'),
+            path: deployment.group_path || '',
+            deployments: [deployment],
+        });
+    });
+
+    const kindOrder: Record<string, number> = { 'git-ops': 0, compose: 1, docker: 2 };
+    return Array.from(groups.values()).sort((a, b) => {
+        const kindDifference = (kindOrder[a.kind] ?? 99) - (kindOrder[b.kind] ?? 99);
+        return kindDifference || a.name.localeCompare(b.name);
+    });
+}
+
+function groupKindLabel(kind: string) {
+    switch (kind) {
+        case 'git-ops':
+            return 'Managed GitOps';
+        case 'compose':
+            return 'Unmanaged Compose';
+        default:
+            return 'Unmanaged Docker';
+    }
+}
+
+function groupRuntimeStatus(group: DeploymentGroup) {
+    const statuses = new Set(group.deployments.map((deployment) => deployment.status));
+    if (statuses.size === 1) {
+        return group.deployments[0].status;
+    }
+    if (statuses.has('running')) {
+        return 'partial';
+    }
+    return 'unknown';
+}
+
 /* --- App Component --- */
 function App() {
     const [activeTab, setActiveTab] = useState(() => tabFromPath(globalThis.location.pathname));
@@ -137,6 +205,8 @@ function App() {
     const [loading, setLoading] = useState(false);
     const [pendingActions, setPendingActions] = useState<Record<string, string>>({});
     const [flashMessage, setFlashMessage] = useState<string>('');
+    const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+    const [adoptionHelpGroups, setAdoptionHelpGroups] = useState<Record<string, boolean>>({});
 
     // Logs state
     const [selectedLogStack, setSelectedLogStack] = useState<Deployment | null>(null);
@@ -144,6 +214,7 @@ function App() {
     const logContainerRef = useRef<HTMLDivElement>(null);
     const evtSource = useRef<EventSource | null>(null);
     const nextLogID = useRef(0);
+    const deploymentGroups = useMemo(() => groupDeployments(deployments), [deployments]);
 
     useEffect(() => {
         fetchData();
@@ -273,6 +344,14 @@ function App() {
         }
     };
 
+    const toggleGroup = (groupID: string, currentlyCollapsed: boolean) => {
+        setCollapsedGroups((current) => ({ ...current, [groupID]: !currentlyCollapsed }));
+    };
+
+    const toggleAdoptionHelp = (groupID: string) => {
+        setAdoptionHelpGroups((current) => ({ ...current, [groupID]: !current[groupID] }));
+    };
+
     return (
         <div className="app-container">
             {/* Sidebar */}
@@ -320,92 +399,149 @@ function App() {
 
                     {/* TAB: Stacks */}
                     {activeTab === 'stacks' && (
-                        <div className="table-container">
+                        <div className="deployment-groups">
                             {deployments.length === 0 ? (
                                 <div className="empty-state">No deployments found.</div>
                             ) : (
-                                <table className="stacks-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Runtime</th>
-                                            <th>Execution</th>
-                                            <th>Stage</th>
-                                            <th>Owner</th>
-                                            <th>Repository</th>
-                                            <th>Last Error</th>
-                                            <th>Path</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {deployments.map(dep => (
-                                            <tr key={dep.id || `${dep.owner}-${dep.repo}`}>
-                                                <td>
-                                                    <span className={`status-badge ${dep.status}`}>
-                                                        {dep.status === 'running' ? <PlayCircle size={14} /> : <Activity size={14} />}
-                                                        {dep.status}
+                                deploymentGroups.map((group) => {
+                                    const collapsed = collapsedGroups[group.id] ?? group.kind !== 'git-ops';
+                                    const runtimeStatus = groupRuntimeStatus(group);
+                                    const adoptionCandidate = group.kind === 'compose';
+                                    const sample = group.deployments[0];
+                                    return (
+                                        <section className="deployment-group" key={group.id}>
+                                            <div className="deployment-group-header">
+                                                <button
+                                                    className="deployment-group-toggle"
+                                                    onClick={() => toggleGroup(group.id, collapsed)}
+                                                    aria-expanded={!collapsed}
+                                                >
+                                                    {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+                                                    <span className="deployment-group-title">
+                                                        <strong>{group.name}</strong>
+                                                        <span className="text-muted">{groupKindLabel(group.kind)}</span>
                                                     </span>
-                                                </td>
-                                                <td title={formatExecutionHistory(dep.history)}>
-                                                    {dep.execution_status ? (
-                                                        <div className="execution-cell">
-                                                            <span className={`status-badge ${dep.execution_status}`}>
-                                                                {dep.execution_status}
-                                                            </span>
-                                                            {dep.history && dep.history.length > 0 ? (
-                                                                <div className="status-detail text-muted">
-                                                                    {dep.history.length} recent runs
-                                                                </div>
-                                                            ) : null}
-                                                        </div>
-                                                    ) : (
-                                                        <span className="text-muted">n/a</span>
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    {dep.execution_stage ? (
-                                                        <span className="stage-pill">{dep.execution_stage}</span>
-                                                    ) : (
-                                                        <span className="text-muted">n/a</span>
-                                                    )}
-                                                </td>
-                                                <td>{dep.owner || <span className="text-muted">docker</span>}</td>
-                                                <td>
-                                                    <strong>{deploymentLabel(dep)}</strong>
-                                                    {dep.managed === false ? (
-                                                        <div className="status-detail text-muted">{dep.image || 'unmanaged container'}</div>
+                                                </button>
+                                                <div className="deployment-group-summary">
+                                                    <span className={`status-badge ${runtimeStatus}`}>{runtimeStatus}</span>
+                                                    <span className="deployment-count">
+                                                        {group.deployments.length} {group.deployments.length === 1 ? 'deployment' : 'deployments'}
+                                                    </span>
+                                                    {adoptionCandidate ? (
+                                                        <button className="adoption-toggle" onClick={() => toggleAdoptionHelp(group.id)}>
+                                                            {adoptionHelpGroups[group.id] ? 'Hide adoption steps' : 'How to adopt'}
+                                                        </button>
                                                     ) : null}
-                                                </td>
-                                                <td className="error-cell">
-                                                    {dep.last_error ? dep.last_error : <span className="text-muted">none</span>}
-                                                </td>
-                                                <td className="text-muted">
-                                                    {dep.path}
-                                                    {dep.disabled ? <div className="status-detail disabled-label">Disabled</div> : null}
-                                                </td>
-                                                <td>
-                                                    <div className="action-group">
-                                                        {availableActions(dep).map(action => {
-                                                            const key = dep.id || `${dep.owner}-${dep.repo}`;
-                                                            const pending = pendingActions[key] === action;
-                                                            return (
-                                                                <button
-                                                                    key={action}
-                                                                    className={`action-btn ${action}`}
-                                                                    onClick={() => handleStackAction(dep, action)}
-                                                                    disabled={pending || loading}
-                                                                >
-                                                                    {pending ? 'Working…' : actionLabel(action)}
-                                                                </button>
-                                                            );
-                                                        })}
-                                                        {dep.managed === false ? <span className="text-muted">n/a</span> : null}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                                </div>
+                                            </div>
+                                            {group.path ? <div className="deployment-group-path">{group.path}</div> : null}
+                                            {adoptionCandidate && adoptionHelpGroups[group.id] ? (
+                                                <div className="adoption-guide">
+                                                    <strong>Adopt this Compose project without duplicating its containers</strong>
+                                                    <ol>
+                                                        <li>Copy {sample.compose_files || 'the Compose file'} and its required assets into a GitHub repository owned by a configured GitHub user.</li>
+                                                        <li>Keep the Compose project identity by adding <code>name: {sample.compose_project || group.name}</code> at the top level.</li>
+                                                        <li>Add a configured deployment topic to the repository, then let GHOps discover it or request Reconcile.</li>
+                                                        <li>Confirm the services are healthy here. Keep {group.path} until any bind-mounted files or data have been migrated explicitly.</li>
+                                                    </ol>
+                                                </div>
+                                            ) : null}
+                                            {!collapsed ? (
+                                                <div className="deployment-group-table">
+                                                    <table className="stacks-table">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>Runtime</th>
+                                                                <th>Execution</th>
+                                                                <th>Stage</th>
+                                                                <th>Owner</th>
+                                                                <th>Repository / Container</th>
+                                                                <th>Last Error</th>
+                                                                <th>Path</th>
+                                                                <th>Actions</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {group.deployments.map(dep => (
+                                                                <tr key={dep.id || `${dep.owner}-${dep.repo}`}>
+                                                                    <td>
+                                                                        <span className={`status-badge ${dep.status}`}>
+                                                                            {dep.status === 'running' ? <PlayCircle size={14} /> : <Activity size={14} />}
+                                                                            {dep.status}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td title={formatExecutionHistory(dep.history)}>
+                                                                        {dep.execution_status ? (
+                                                                            <div className="execution-cell">
+                                                                                <span className={`status-badge ${dep.execution_status}`}>
+                                                                                    {dep.execution_status}
+                                                                                </span>
+                                                                                {dep.history && dep.history.length > 0 ? (
+                                                                                    <div className="status-detail text-muted">
+                                                                                        {dep.history.length} recent runs
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </div>
+                                                                        ) : (
+                                                                            <span className="text-muted">n/a</span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td>
+                                                                        {dep.execution_stage ? (
+                                                                            <span className="stage-pill">{dep.execution_stage}</span>
+                                                                        ) : (
+                                                                            <span className="text-muted">n/a</span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td>{dep.owner || <span className="text-muted">docker</span>}</td>
+                                                                    <td>
+                                                                        <strong>{deploymentLabel(dep)}</strong>
+                                                                        {dep.compose_service ? (
+                                                                            <div className="status-detail text-muted">service: {dep.compose_service}</div>
+                                                                        ) : null}
+                                                                        {dep.managed === false ? (
+                                                                            <div className="status-detail text-muted">{dep.image || 'unmanaged container'}</div>
+                                                                        ) : null}
+                                                                    </td>
+                                                                    <td className="error-cell">
+                                                                        {dep.last_error ? dep.last_error : <span className="text-muted">none</span>}
+                                                                    </td>
+                                                                    <td className="text-muted">
+                                                                        {dep.managed === false ? dep.compose_files || dep.path : dep.path}
+                                                                        {dep.disabled ? <div className="status-detail disabled-label">Disabled</div> : null}
+                                                                    </td>
+                                                                    <td>
+                                                                        <div className="action-group">
+                                                                            {availableActions(dep).map(action => {
+                                                                                const key = dep.id || `${dep.owner}-${dep.repo}`;
+                                                                                const pending = pendingActions[key] === action;
+                                                                                return (
+                                                                                    <button
+                                                                                        key={action}
+                                                                                        className={`action-btn ${action}`}
+                                                                                        onClick={() => handleStackAction(dep, action)}
+                                                                                        disabled={pending || loading}
+                                                                                    >
+                                                                                        {pending ? 'Working…' : actionLabel(action)}
+                                                                                    </button>
+                                                                                );
+                                                                            })}
+                                                                            {dep.managed === false ? (
+                                                                                <span className="text-muted">
+                                                                                    {dep.adoption_status === 'candidate' ? 'Adopt first' : 'n/a'}
+                                                                                </span>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            ) : null}
+                                        </section>
+                                    );
+                                })
                             )}
                         </div>
                     )}
@@ -416,14 +552,19 @@ function App() {
                             <div className="logs-sidebar">
                                 <h3>Select Stack</h3>
                                 <div className="stack-list">
-                                    {deployments.map(dep => (
-                                        <button
-                                            key={dep.id || `${dep.owner}-${dep.repo}`}
-                                            className={`stack-select-btn ${selectedLogStack?.id === dep.id ? 'active' : ''}`}
-                                            onClick={() => setSelectedLogStack(dep)}
-                                        >
-                                            {deploymentLabel(dep)}
-                                        </button>
+                                    {deploymentGroups.map((group) => (
+                                        <div className="stack-list-group" key={group.id}>
+                                            <div className="stack-list-group-label">{group.name}</div>
+                                            {group.deployments.map(dep => (
+                                                <button
+                                                    key={dep.id || `${dep.owner}-${dep.repo}`}
+                                                    className={`stack-select-btn ${selectedLogStack?.id === dep.id ? 'active' : ''}`}
+                                                    onClick={() => setSelectedLogStack(dep)}
+                                                >
+                                                    {deploymentLabel(dep)}
+                                                </button>
+                                            ))}
+                                        </div>
                                     ))}
                                 </div>
                             </div>
