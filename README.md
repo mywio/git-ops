@@ -39,7 +39,7 @@ Docker is also the recommended approach on Windows and macOS, where the native b
 | Plugin | Enable when | Extra config needed |
 | :--- | :--- | :--- |
 | `reconciler` | Always — core deploy engine | none beyond the three required vars |
-| `ui` | You want the web dashboard | `CORE_HTTP_ADDR` |
+| `ui` | You want the web dashboard | `CORE_HTTP_ADDR` and `UI_AUTH_VERIFY_URL` (recommended) |
 | `audit` | You want an event history | none |
 | `compose_refresh` | You want manual pull-and-restart for compose-only stacks | none |
 | `image_refresh` | You want automatic image updates | none |
@@ -103,6 +103,8 @@ Maintainer-focused verification workflows, including mutation testing, are docum
 | `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
 | `PLUGINS_ALLOW` | Comma-separated plugin `.so` base names to load | No | `reconciler,ui,discord` |
 | `CORE_HTTP_ADDR` | Core HTTP bind address for APIs/UI | No | `127.0.0.1:8080` |
+| `UI_AUTH_VERIFY_URL` | OAuth2 Proxy auth endpoint used to verify UI sessions | When UI auth is enabled | `http://oauth2-proxy:4180/oauth2/auth` |
+| `UI_TRUST_AUTH_HEADER` | Explicitly trust a proxy-supplied UI identity header; unsafe unless the proxy overwrites it | No | `false` |
 | `SECRETS_DIR` | Path to local secrets directory | No | `/etc/git-ops/secrets` |
 
 You can also use a YAML config file (default `config.yaml` or set `CONFIG_FILE`).

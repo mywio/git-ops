@@ -117,6 +117,10 @@ func LoadConfigMapFromEnv() ConfigMap {
 			"api_key":    os.Getenv("MCP_API_KEY"),
 			"target_dir": os.Getenv("TARGET_DIR"),
 		},
+		"ui": {
+			"auth_verify_url":   os.Getenv("UI_AUTH_VERIFY_URL"),
+			"trust_auth_header": os.Getenv("UI_TRUST_AUTH_HEADER"),
+		},
 		"google_secret_manager": {
 			"project_id": os.Getenv("GOOGLE_CLOUD_PROJECT"),
 		},

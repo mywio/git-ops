@@ -65,7 +65,7 @@ func TestUIPlugin(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestUIPluginRequiresDefaultAuthHeader(t *testing.T) {
+func TestUIPluginRejectsUnverifiedAuthHeaderByDefault(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
@@ -75,12 +75,13 @@ func TestUIPluginRequiresDefaultAuthHeader(t *testing.T) {
 	assert.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/system/info", nil)
+	req.Header.Set("X-Auth-Request-User", "spoofed")
 	rr := httptest.NewRecorder()
 
 	mgr.GetMuxServer().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
-	assert.Contains(t, rr.Body.String(), "missing authenticated user header")
+	assert.Contains(t, rr.Body.String(), "unauthorized")
 }
 
 func TestUIPluginAcceptsCustomAuthHeader(t *testing.T) {
@@ -89,7 +90,8 @@ func TestUIPluginAcceptsCustomAuthHeader(t *testing.T) {
 	mgr := core.NewModuleManager(logger)
 	mgr.SetConfig(map[string]map[string]any{
 		"ui": {
-			"auth_header": "X-Forwarded-User",
+			"auth_header":       "X-Forwarded-User",
+			"trust_auth_header": true,
 		},
 	})
 
@@ -100,6 +102,39 @@ func TestUIPluginAcceptsCustomAuthHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/ui/system", nil)
 	req.Header.Set("X-Forwarded-User", "alice")
 	rr := httptest.NewRecorder()
+
+	mgr.GetMuxServer().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "<!doctype html")
+}
+
+func TestUIPluginVerifiesOAuth2ProxySession(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "session=valid", r.Header.Get("Cookie"))
+		assert.Equal(t, "/ui/system", r.Header.Get("X-Forwarded-Uri"))
+		w.Header().Set("X-Auth-Request-User", "verified-alice")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer authServer.Close()
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{
+		"ui": {"auth_verify_url": authServer.URL},
+	})
+
+	plugin := &UIPlugin{}
+	require.NoError(t, plugin.Init(context.Background(), logger, mgr))
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/system", nil)
+	req.Header.Set("Cookie", "session=valid")
+	req.Header.Set("X-Auth-Request-User", "spoofed-mallory")
+	rr := httptest.NewRecorder()
+
+	user, err := plugin.verifyAuthenticatedUser(req)
+	require.NoError(t, err)
+	assert.Equal(t, "verified-alice", user)
 
 	mgr.GetMuxServer().ServeHTTP(rr, req)
 
@@ -133,6 +168,7 @@ func TestUIPluginExecutesStackActionCapability(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
 	actionPlugin := &uiActionTestPlugin{capabilities: []core.Capability{core.CapabilityRestartStack}}
 	mgr.Register(actionPlugin)
 
@@ -164,6 +200,7 @@ func TestUIPluginRejectsUnknownStackAction(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))
@@ -183,6 +220,7 @@ func TestUIPluginRejectsStackActionWithoutAuth(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))
@@ -201,6 +239,7 @@ func TestUIPluginRejectsStackActionWrongMethod(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))

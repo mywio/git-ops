@@ -32,6 +32,9 @@ mcp:
 ui:
   disable_auth: false
   auth_header: "X-Auth-Request-User"
+  # Recommended: verify the browser session directly with OAuth2 Proxy.
+  auth_verify_url: "http://oauth2-proxy:4180/oauth2/auth"
+  trust_auth_header: false
 
 compose_refresh:
   enabled: true

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,8 @@ const (
 	uiMethodNotAllowed = "Method not allowed"
 	headerContentType  = "Content-Type"
 )
+
+type authenticatedUserContextKey struct{}
 
 func (p *UIPlugin) registerRoutes() {
 	if p.mux == nil {
@@ -244,11 +247,16 @@ func (p *UIPlugin) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		if p.authenticatedUser(r) == "" {
-			http.Error(w, "missing authenticated user header", http.StatusUnauthorized)
+
+		user, err := p.verifyAuthenticatedUser(r)
+		if err != nil {
+			p.logger.Warn("UI authentication rejected", "error", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+
+		ctx := context.WithValue(r.Context(), authenticatedUserContextKey{}, user)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -256,7 +264,50 @@ func (p *UIPlugin) authenticatedUser(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	return strings.TrimSpace(r.Header.Get(p.cfg.AuthHeader))
+	user, _ := r.Context().Value(authenticatedUserContextKey{}).(string)
+	return strings.TrimSpace(user)
+}
+
+func (p *UIPlugin) verifyAuthenticatedUser(r *http.Request) (string, error) {
+	if verifyURL := strings.TrimSpace(p.cfg.AuthVerifyURL); verifyURL != "" {
+		return p.verifyWithAuthEndpoint(r, verifyURL)
+	}
+	if !p.cfg.TrustAuthHeader {
+		return "", fmt.Errorf("ui auth_verify_url is not configured and trust_auth_header is false")
+	}
+
+	user := strings.TrimSpace(r.Header.Get(p.cfg.AuthHeader))
+	if user == "" {
+		return "", fmt.Errorf("missing authenticated user header")
+	}
+	return user, nil
+}
+
+func (p *UIPlugin) verifyWithAuthEndpoint(r *http.Request, verifyURL string) (string, error) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, verifyURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create auth verification request: %w", err)
+	}
+	req.Header.Set("Cookie", r.Header.Get("Cookie"))
+	req.Header.Set("Authorization", r.Header.Get("Authorization"))
+	req.Header.Set("X-Forwarded-Method", r.Method)
+	req.Header.Set("X-Forwarded-Uri", r.URL.RequestURI())
+	req.Header.Set("X-Forwarded-Host", r.Host)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("verify session with auth endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("auth endpoint returned %s", resp.Status)
+	}
+	user := strings.TrimSpace(resp.Header.Get(p.cfg.AuthHeader))
+	if user == "" {
+		return "", fmt.Errorf("auth endpoint response missing %s", p.cfg.AuthHeader)
+	}
+	return user, nil
 }
 
 func (p *UIPlugin) handleRootRedirect(w http.ResponseWriter, r *http.Request) {
