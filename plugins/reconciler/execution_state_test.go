@@ -161,6 +161,10 @@ func TestListManagedDeploymentsIncludesExecutionMetadata(t *testing.T) {
 	assert.Equal(t, "acme", entry["owner"])
 	assert.Equal(t, "api", entry["repo"])
 	assert.Equal(t, repoPath, entry["path"])
+	assert.Equal(t, "git-ops-owner:acme", entry["group_id"])
+	assert.Equal(t, "acme", entry["group_name"])
+	assert.Equal(t, "git-ops", entry["group_kind"])
+	assert.Equal(t, filepath.Join(targetDir, "acme"), entry["group_path"])
 	assert.Equal(t, snapshot.ExecutionID, entry["execution_id"])
 	assert.Equal(t, string(core.ExecutionStatusFailed), entry["execution_status"])
 	assert.Equal(t, string(core.ExecutionStageComposeUp), entry["execution_stage"])
@@ -257,7 +261,17 @@ func TestListDeploymentsIncludesUnmanagedRunningContainers(t *testing.T) {
 	listDockerContainers = func() ([]dockerPSContainer, error) {
 		return []dockerPSContainer{
 			{ID: "managed", Names: "acme-api-1", Image: "managed:latest", State: "running", Status: "Up 1 minute"},
-			{ID: "unmanaged", Names: "postgres-dev", Image: "postgres:16", State: "running", Status: "Up 2 minutes"},
+			{
+				ID:                 "unmanaged",
+				Names:              "postgres-dev",
+				Image:              "postgres:16",
+				State:              "running",
+				Status:             "Up 2 minutes",
+				ComposeProject:     "production",
+				ComposeWorkingDir:  "/apps/production",
+				ComposeConfigFiles: "/apps/production/compose.yaml",
+				ComposeService:     "postgres",
+			},
 		}, nil
 	}
 	defer func() {
@@ -278,16 +292,47 @@ func TestListDeploymentsIncludesUnmanagedRunningContainers(t *testing.T) {
 	assert.Equal(t, "postgres-dev", deployments[1]["display_name"])
 	assert.Equal(t, false, deployments[1]["managed"])
 	assert.Equal(t, "postgres-dev", deployments[1]["container"])
+	assert.Equal(t, "compose:production:/apps/production", deployments[1]["group_id"])
+	assert.Equal(t, "production", deployments[1]["group_name"])
+	assert.Equal(t, "compose", deployments[1]["group_kind"])
+	assert.Equal(t, "/apps/production", deployments[1]["group_path"])
+	assert.Equal(t, "/apps/production", deployments[1]["path"])
+	assert.Equal(t, "postgres", deployments[1]["compose_service"])
+	assert.Equal(t, "/apps/production/compose.yaml", deployments[1]["compose_files"])
+	assert.Equal(t, "candidate", deployments[1]["adoption_status"])
+}
+
+func TestListDeploymentsGroupsStandaloneContainers(t *testing.T) {
+	originalListDockerContainers := listDockerContainers
+	listDockerContainers = func() ([]dockerPSContainer, error) {
+		return []dockerPSContainer{{ID: "abc123", Names: "jaeger", Image: "jaeger:latest", State: "running"}}, nil
+	}
+	defer func() {
+		listDockerContainers = originalListDockerContainers
+	}()
+
+	reconciler := &Reconciler{
+		cfg:    config.Config{TargetDir: t.TempDir()},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	deployments, err := reconciler.listDeployments()
+	require.NoError(t, err)
+	require.Len(t, deployments, 1)
+	assert.Equal(t, "docker-standalone", deployments[0]["group_id"])
+	assert.Equal(t, "Standalone containers", deployments[0]["group_name"])
+	assert.Equal(t, "docker", deployments[0]["group_kind"])
+	assert.Equal(t, "unsupported", deployments[0]["adoption_status"])
 }
 
 func TestParseDockerPSOutputIgnoresMalformedLines(t *testing.T) {
-	out := []byte("{\"Names\":\"db\",\"State\":\"running\"}\nnot-json\n{\"Names\":\"web\",\"State\":\"running\"}\n")
+	out := []byte("{\"Names\":\"db\",\"State\":\"running\",\"ComposeProject\":\"production\",\"ComposeService\":\"db\"}\nnot-json\n{\"Names\":\"web\",\"State\":\"running\"}\n")
 
 	containers := parseDockerPSOutput(out)
 
 	require.Len(t, containers, 2)
 	assert.Equal(t, []dockerPSContainer{
-		{Names: "db", State: "running"},
+		{Names: "db", State: "running", ComposeProject: "production", ComposeService: "db"},
 		{Names: "web", State: "running"},
 	}, containers)
 }

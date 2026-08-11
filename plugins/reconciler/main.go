@@ -65,11 +65,15 @@ type composePSContainer struct {
 }
 
 type dockerPSContainer struct {
-	ID     string `json:"ID"`
-	Names  string `json:"Names"`
-	Image  string `json:"Image"`
-	State  string `json:"State"`
-	Status string `json:"Status"`
+	ID                 string `json:"ID"`
+	Names              string `json:"Names"`
+	Image              string `json:"Image"`
+	State              string `json:"State"`
+	Status             string `json:"Status"`
+	ComposeProject     string `json:"ComposeProject"`
+	ComposeWorkingDir  string `json:"ComposeWorkingDir"`
+	ComposeConfigFiles string `json:"ComposeConfigFiles"`
+	ComposeService     string `json:"ComposeService"`
 }
 
 type composeSpec struct {
@@ -102,6 +106,7 @@ var remoteComposeFilenames = []string{"compose.yaml", "docker-compose.yml"}
 const (
 	dockerFormatFlag         = "--format"
 	dockerJSONFormat         = "json"
+	dockerPSJSONFormat       = `{"ID":{{json .ID}},"Names":{{json .Names}},"Image":{{json .Image}},"State":{{json .State}},"Status":{{json .Status}},"ComposeProject":{{json (.Label "com.docker.compose.project")}},"ComposeWorkingDir":{{json (.Label "com.docker.compose.project.working_dir")}},"ComposeConfigFiles":{{json (.Label "com.docker.compose.project.config_files")}},"ComposeService":{{json (.Label "com.docker.compose.service")}}}`
 	repoOwnerDescription     = "Repository owner"
 	repoNameDescription      = "Repository name"
 	repoFullNameDescription  = "Repository full name"
@@ -127,7 +132,7 @@ var listComposePSContainers = func(repoPath string) ([]composePSContainer, error
 	return parseComposePSOutput(out), nil
 }
 var listDockerContainers = func() ([]dockerPSContainer, error) {
-	cmd := exec.Command("docker", "ps", dockerFormatFlag, dockerJSONFormat)
+	cmd := exec.Command("docker", "ps", dockerFormatFlag, dockerPSJSONFormat)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -1200,6 +1205,10 @@ func (r *Reconciler) buildManagedDeployment(owner, repo, repoPath string) map[st
 		"source":           "git-ops",
 		"managed":          true,
 		"display_name":     fullName,
+		"group_id":         "git-ops-owner:" + owner,
+		"group_name":       owner,
+		"group_kind":       "git-ops",
+		"group_path":       filepath.Join(r.cfg.TargetDir, owner),
 		"owner":            owner,
 		"repo":             repo,
 		"path":             repoPath,
@@ -1299,15 +1308,32 @@ func (r *Reconciler) listUnmanagedContainers(exclude map[string]struct{}) ([]map
 			status = "running"
 		}
 
+		composeProject := strings.TrimSpace(container.ComposeProject)
+		composeWorkingDir := strings.TrimSpace(container.ComposeWorkingDir)
+		groupID := "docker-standalone"
+		groupName := "Standalone containers"
+		groupKind := "docker"
+		adoptionStatus := "unsupported"
+		if composeProject != "" {
+			groupID = "compose:" + composeProject + ":" + composeWorkingDir
+			groupName = composeProject
+			groupKind = "compose"
+			adoptionStatus = "candidate"
+		}
+
 		deployments = append(deployments, map[string]interface{}{
 			"id":               "container:" + name,
 			"kind":             "container",
 			"source":           "docker",
 			"managed":          false,
 			"display_name":     name,
+			"group_id":         groupID,
+			"group_name":       groupName,
+			"group_kind":       groupKind,
+			"group_path":       composeWorkingDir,
 			"owner":            "",
 			"repo":             name,
-			"path":             "",
+			"path":             composeWorkingDir,
 			"status":           status,
 			"execution_id":     "",
 			"execution_status": "",
@@ -1318,6 +1344,10 @@ func (r *Reconciler) listUnmanagedContainers(exclude map[string]struct{}) ([]map
 			"container_id":     container.ID,
 			"image":            strings.TrimSpace(container.Image),
 			"docker_status":    strings.TrimSpace(container.Status),
+			"compose_project":  composeProject,
+			"compose_service":  strings.TrimSpace(container.ComposeService),
+			"compose_files":    strings.TrimSpace(container.ComposeConfigFiles),
+			"adoption_status":  adoptionStatus,
 		})
 	}
 
