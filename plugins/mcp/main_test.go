@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,21 @@ func TestMCPPlugin(t *testing.T) {
 
 	err = Plugin.Stop(ctx)
 	assert.NoError(t, err)
+}
+
+func TestMCPPluginStopHonorsContextDeadline(t *testing.T) {
+	plugin := &MCPPlugin{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		wg:     &sync.WaitGroup{},
+	}
+	plugin.wg.Add(1)
+	t.Cleanup(plugin.wg.Done)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := plugin.Stop(ctx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestListStacksReturnsOwnerRepoPaths(t *testing.T) {

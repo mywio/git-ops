@@ -458,19 +458,22 @@ func (m *ModuleManager) Start(ctx context.Context) {
 	}
 }
 
-// Stop stops all modules in reverse registration order and then shuts down the
-// shared HTTP server.
+// Stop first stops accepting HTTP work, then stops all modules in reverse
+// registration order.
 func (m *ModuleManager) Stop(ctx context.Context) {
+	if m.server != nil {
+		if err := m.server.Shutdown(ctx); err != nil {
+			m.logger.Error("HTTP server shutdown failed", "error", err)
+			if closeErr := m.server.Close(); closeErr != nil && closeErr != http.ErrServerClosed {
+				m.logger.Error("HTTP server forced close failed", "error", closeErr)
+			}
+		}
+	}
 	for i := len(m.modules) - 1; i >= 0; i-- {
 		mod := m.modules[i]
 		m.logger.Info("Stopping module", "module", mod.Name())
 		if err := mod.Stop(ctx); err != nil {
 			m.logger.Error("Error stopping module", "module", mod.Name(), "error", err)
-		}
-	}
-	if m.server != nil {
-		if err := m.server.Shutdown(ctx); err != nil {
-			m.logger.Error("HTTP server shutdown failed", "error", err)
 		}
 	}
 }

@@ -130,9 +130,20 @@ func (p *MCPPlugin) Start(ctx context.Context) error {
 
 // Stop stops the plugin services
 func (p *MCPPlugin) Stop(ctx context.Context) error {
-	p.wg.Wait()
-	p.logger.Info("MCP Server stopped")
-	return nil
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		p.logger.Info("MCP Server stopped")
+		return nil
+	case <-ctx.Done():
+		p.logger.Warn("MCP Server shutdown timed out", "error", ctx.Err())
+		return ctx.Err()
+	}
 }
 
 // Description returns a description of the plugin
