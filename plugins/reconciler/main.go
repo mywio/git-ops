@@ -1448,6 +1448,14 @@ func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) 
 	}
 	cmd := newLogCommand(ctx, "compose", "logs", "-f", "--tail", lines)
 	cmd.Dir = repoPath
+	composeEnv := r.composeLogEnvironment(ctx, owner, repo, repoPath)
+	if len(composeEnv) > 0 {
+		baseEnv := cmd.Env
+		if len(baseEnv) == 0 {
+			baseEnv = os.Environ()
+		}
+		cmd.Env = environmentWithOverrides(baseEnv, composeEnv)
+	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1482,6 +1490,61 @@ func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) 
 	}()
 
 	return logChan, nil
+}
+
+func (r *Reconciler) composeLogEnvironment(ctx context.Context, owner, repo, repoPath string) []string {
+	logger := r.logger.With("full_name", fmt.Sprintf("%s/%s", owner, repo))
+	secretValues := make(map[string]string)
+	secretSources := make(map[string]string)
+	for _, plugin := range r.secretPlugins() {
+		secrets, err := loadSecretsFromPlugin(ctx, plugin, owner, repo)
+		if err != nil {
+			logger.Warn("Failed to load current compose environment for logs; using persisted values", "plugin", plugin.Name(), "error", err)
+			continue
+		}
+		for key, value := range secrets {
+			if winner, exists := secretSources[key]; exists {
+				logger.Warn("Duplicate compose environment key while preparing logs", "key", key, "winner", winner, "skipped", plugin.Name())
+				continue
+			}
+			secretValues[key] = value
+			secretSources[key] = plugin.Name()
+		}
+	}
+
+	persisted, err := loadPersistedComposeEnv(repoPath)
+	if err != nil {
+		logger.Warn("Failed to load persisted compose environment for logs", "error", err)
+		return secretEnvFromValues(secretValues)
+	}
+	for key, value := range persisted {
+		if _, exists := secretValues[key]; !exists {
+			secretValues[key] = value
+		}
+	}
+	return secretEnvFromValues(secretValues)
+}
+
+func environmentWithOverrides(base, overrides []string) []string {
+	overrideKeys := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			overrideKeys[key] = struct{}{}
+		}
+	}
+
+	merged := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, replaced := overrideKeys[key]; replaced {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	return append(merged, overrides...)
 }
 
 func (r *Reconciler) streamContainerLogs(ctx context.Context, container, lines string) (<-chan string, error) {
