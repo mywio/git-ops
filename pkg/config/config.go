@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,6 +131,16 @@ func LoadConfigMapFromEnv() ConfigMap {
 	}
 	if v := os.Getenv("NOTIFY_WEBHOOK_EVENTS"); v != "" {
 		cfg["webhook"]["subscribe"] = v
+	}
+	if v := os.Getenv("UI_TRUST_AUTH_HEADER"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			cfg["ui"]["trust_auth_header"] = v
+		} else {
+			cfg["ui"]["trust_auth_header"] = parsed
+		}
+	} else {
+		delete(cfg["ui"], "trust_auth_header")
 	}
 	return cfg
 }

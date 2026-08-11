@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestLoadConfigMapFromEnvParsesUITrustAuthHeader(t *testing.T) {
+	t.Setenv("UI_TRUST_AUTH_HEADER", "true")
+
+	cfg := LoadConfigMapFromEnv()
+
+	value, ok := cfg["ui"]["trust_auth_header"].(bool)
+	if !ok || !value {
+		t.Fatalf("expected boolean true, got %#v", cfg["ui"]["trust_auth_header"])
+	}
+}
+
+func TestLoadConfigMapFromEnvOmitsEmptyUITrustAuthHeader(t *testing.T) {
+	t.Setenv("UI_TRUST_AUTH_HEADER", "")
+
+	cfg := LoadConfigMapFromEnv()
+
+	if _, ok := cfg["ui"]["trust_auth_header"]; ok {
+		t.Fatal("expected empty UI_TRUST_AUTH_HEADER to be omitted")
+	}
+}
+
 func FuzzSplitAndTrim(f *testing.F) {
 	for _, seed := range []string{
 		"",
