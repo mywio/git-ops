@@ -174,6 +174,10 @@ func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "owner, repo, and action are required", http.StatusBadRequest)
 		return
 	}
+	if err := core.ValidateStackIdentity(req.Owner, req.Repo); err != nil {
+		http.Error(w, "invalid owner or repo", http.StatusBadRequest)
+		return
+	}
 
 	capability, ok := stackActionCapability(req.Action)
 	if !ok {

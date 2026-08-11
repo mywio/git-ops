@@ -228,6 +228,9 @@ func requiredRepoParams(action string, params map[string]interface{}) (string, s
 	if !okOwner || !okRepo || strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
 		return "", "", fmt.Errorf("%s requires 'owner' and 'repo' string parameters", action)
 	}
+	if err := core.ValidateStackIdentity(owner, repo); err != nil {
+		return "", "", fmt.Errorf("%s: %w", action, err)
+	}
 	return owner, repo, nil
 }
 
@@ -259,6 +262,10 @@ func (r *Reconciler) handleReconcileStackEvent(ctx context.Context, event core.I
 		r.logger.Warn("reconcile_stack event missing owner or repo details", "source", event.Source)
 		return
 	}
+	if err := core.ValidateStackIdentity(owner, repo); err != nil {
+		r.logger.Warn("reconcile_stack event has invalid owner or repo", "source", event.Source, "error", err)
+		return
+	}
 	forceType, _ := event.Details["force_type"].(string)
 
 	r.logger.Info("Received reconcile_stack event", "source", event.Source, "owner", owner, "repo", repo, "force_type", forceType)
@@ -273,6 +280,10 @@ func (r *Reconciler) handleStackControlEvent(action string) core.Listener {
 		repo, okRepo := event.Details["repo"].(string)
 		if !okOwner || !okRepo {
 			r.logger.Warn("stack control event missing owner or repo details", "event", action, "source", event.Source)
+			return
+		}
+		if err := core.ValidateStackIdentity(owner, repo); err != nil {
+			r.logger.Warn("stack control event has invalid owner or repo", "event", action, "source", event.Source, "error", err)
 			return
 		}
 
@@ -1394,7 +1405,10 @@ func (r *Reconciler) getSystemInfo() (map[string]interface{}, error) {
 }
 
 func (r *Reconciler) streamLogs(ctx context.Context, owner, repo, lines string) (<-chan string, error) {
-	repoPath := filepath.Join(r.cfg.TargetDir, owner, repo)
+	repoPath, err := core.ResolveStackPath(r.cfg.TargetDir, owner, repo)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.Command("docker", "compose", "logs", "-f", "--tail", lines)
 	cmd.Dir = repoPath
 

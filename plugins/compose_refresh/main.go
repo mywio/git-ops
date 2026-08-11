@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -138,7 +137,10 @@ func (p *ComposeRefreshPlugin) refreshStackImages(ctx context.Context, params ma
 		return refreshResult{}, fmt.Errorf("compose_refresh is disabled")
 	}
 
-	stackPath := filepath.Join(p.targetDir, owner, repo)
+	stackPath, err := core.ResolveStackPath(p.targetDir, owner, repo)
+	if err != nil {
+		return refreshResult{}, err
+	}
 	result := refreshResult{Owner: owner, Repo: repo, StackPath: stackPath, Status: "started"}
 	p.publishLifecycle(ctx, "compose_refresh_started", result, "")
 
@@ -220,6 +222,9 @@ func requiredComposeRefreshRepoParams(params map[string]interface{}) (string, st
 	repo = strings.TrimSpace(repo)
 	if !okOwner || !okRepo || owner == "" || repo == "" {
 		return "", "", fmt.Errorf("refresh_stack_images requires 'owner' and 'repo' string parameters")
+	}
+	if err := core.ValidateStackIdentity(owner, repo); err != nil {
+		return "", "", fmt.Errorf("refresh_stack_images: %w", err)
 	}
 	return owner, repo, nil
 }

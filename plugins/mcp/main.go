@@ -415,6 +415,9 @@ func parseStackServicePath(rawPath, prefix string) (stack string, service string
 		return "", "", fmt.Errorf("format: %s{owner}/{repo}/{service}", prefix)
 	}
 
+	if err := core.ValidateStackIdentity(parts[0], parts[1]); err != nil {
+		return "", "", err
+	}
 	stack = path.Join(parts[0], parts[1])
 	service = parts[2]
 	return stack, service, nil
@@ -452,6 +455,9 @@ func parseStackPath(rawPath, prefix string) (stack string, err error) {
 	parts := strings.Split(trimmed, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", fmt.Errorf("format: %s{owner}/{repo}", prefix)
+	}
+	if err := core.ValidateStackIdentity(parts[0], parts[1]); err != nil {
+		return "", err
 	}
 	return trimmed, nil
 }
@@ -492,7 +498,10 @@ func listStacks(dir string) ([]string, error) {
 }
 
 func dockerComposeExec(targetDir, repo string, args ...string) (string, error) {
-	stackDir := filepath.Join(targetDir, repo)
+	stackDir, err := core.ResolveStackRefPath(targetDir, repo)
+	if err != nil {
+		return "", err
+	}
 	cmd := exec.Command("docker", append([]string{"compose", "-f", filepath.Join(stackDir, "docker-compose.yml")}, args...)...)
 	cmd.Dir = stackDir
 	output, err := cmd.Output()

@@ -216,6 +216,27 @@ func TestUIPluginRejectsUnknownStackAction(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
+func TestUIPluginRejectsUnsafeStackPath(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	mgr := core.NewModuleManager(logger)
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	actionPlugin := &uiActionTestPlugin{capabilities: []core.Capability{core.CapabilityRestartStack}}
+	mgr.Register(actionPlugin)
+
+	plugin := &UIPlugin{}
+	require.NoError(t, plugin.Init(context.Background(), logger, mgr))
+
+	body := []byte(`{"owner":"..","repo":"outside","action":"restart_stack"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ui/stacks/action", bytes.NewReader(body))
+	req.Header.Set("X-Auth-Request-User", "alice")
+	rr := httptest.NewRecorder()
+
+	mgr.GetMuxServer().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Empty(t, actionPlugin.action)
+}
+
 func TestUIPluginRejectsStackActionWithoutAuth(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
