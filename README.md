@@ -45,14 +45,24 @@ Docker is also the recommended approach on Windows and macOS, where the native b
 | `image_refresh` | You want automatic image updates | none |
 | `env_forwarder` | You forward env vars to stacks | allowlist in config |
 | `file_forwarder` | You forward host files to stacks | file list in config |
-| `webhook_trigger` | You want to trigger reconcile via HTTP | optional `WEBHOOK_TOKEN` |
+| `webhook_trigger` | You want reconcile or GitHub push webhooks | `WEBHOOK_TOKEN`; `GITHUB_WEBHOOK_SECRET` for GitHub pushes |
+| `local_deploy` | You want exact-commit build/deploy/rollback on the host | systemd host service; see `plugins/local_deploy/README.md` |
+| `fleet_controller` | You want a central UI to monitor multiple servers | dedicated TLS listener, agent CA, pools; see `docs/github-actions-runners.md` |
+| `github_actions` | You deploy through private-repository Actions workflows | named GitHub App/PAT connections and `fleet_controller` |
 | `notifier_discord` | You want Discord alerts | `DISCORD_WEBHOOK_URL` |
 | `notifier_pushover` | You want Pushover alerts | `NOTIFY_PUSHOVER_TOKEN` and `NOTIFY_PUSHOVER_USER` |
 | `notifier_webhook` | You want generic webhook alerts | `NOTIFY_WEBHOOK_URL` |
 | `google_secret_manager` | You use GCP secrets | Google ADC credentials and `GOOGLE_CLOUD_PROJECT` |
 | `mcp` | You use AI tooling | `MCP_API_KEY` |
 
-Add plugins to `PLUGINS_ALLOW` one at a time as you need them.
+The official image bundles all production plugins in `/app/plugins`; no plugin
+volume mount is needed. The `example` plugin is a development template and is
+not packaged. `PLUGINS_ALLOW` (or YAML `core.plugins`) limits which plugins are
+loaded. Without an allowlist, all bundled plugins are loaded, while optional
+features still require their own configuration and `enabled` settings.
+
+Add plugins to `PLUGINS_ALLOW` one at a time as you need them. Use the `.so` base
+name: for example, the Discord plugin is selected with `discord`.
 
 ## Features
 - **Modular Plugin Architecture**: Extensible functionality via plugins (Secrets, UI, AI Context, Notifications).
@@ -96,19 +106,23 @@ Maintainer-focused verification workflows, including mutation testing, are docum
 | `GITHUB_TOKEN` | PAT with `repo` scope | Yes | `ghp_123...` |
 | `GITHUB_USERS` | Comma-separated users/orgs to scan | Yes | `myuser,myorg` |
 | `TOPIC_FILTER` | Comma-separated GitHub topics to watch for | Yes | `homelab-server-1,prod` |
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret for `POST /webhooks/github` | For GitHub push webhooks | random secret |
 | `TARGET_DIR` | Local path to store stacks | No | `/opt/stacks` |
 | `GLOBAL_HOOKS_DIR`| Path to server-wide hooks | No | `/etc/git-ops/hooks` |
 | `SYNC_INTERVAL` | Loop frequency | No | `5m` (default) |
 | `DRY_RUN` | Log only, no changes | No | `false` |
-| `PLUGINS_DIR` | Path to plugins directory | No | `./plugins` (default) |
+| `PLUGINS_DIR` | Path to plugins directory | No | `/app/plugins` (official image); `./plugins` (native default) |
 | `PLUGINS_ALLOW` | Comma-separated plugin `.so` base names to load | No | `reconciler,ui,discord` |
 | `CORE_HTTP_ADDR` | Core HTTP bind address for APIs/UI | No | `127.0.0.1:8080` |
 | `UI_AUTH_VERIFY_URL` | OAuth2 Proxy auth endpoint used to verify UI sessions | When UI auth is enabled | `http://oauth2-proxy:4180/oauth2/auth` |
 | `UI_TRUST_AUTH_HEADER` | Explicitly trust a proxy-supplied UI identity header; unsafe unless the proxy overwrites it | No | `false` |
 | `SECRETS_DIR` | Path to local secrets directory | No | `/etc/git-ops/secrets` |
+| `LOCAL_DEPLOY_ENABLED` | Enable host/systemd exact-commit deployments; other settings are documented by the plugin | No | `true` |
 
 You can also use a YAML config file (default `config.yaml` or set `CONFIG_FILE`).
-See `examples/config.yaml` and `docs/deploy.md`.
+See `examples/config.yaml` and `docs/deploy.md`. YAML values override environment
+variables. In the official image, omit `core.plugins_dir` or set it to
+`/app/plugins`.
 
 ## Plugins
 git-ops supports dynamically loaded plugins. By default, it looks for `.so` files in the `plugins/` directory relative to the working directory.
@@ -124,6 +138,7 @@ Available plugins:
 - **Discord Notifier**: Sends deployment alerts to a Discord webhook.
 - **Webhook Notifier**: Sends deployment events to a generic webhook endpoint.
 - **Webhook Trigger**: Exposes `POST /reconcile` to trigger an immediate reconciliation on demand.
+- **Local Deploy**: Runs strict repository-defined build/deploy/verify/rollback recipes at an exact commit. This host/systemd-only plugin is not supported by the official container image.
 - **Audit**: Subscribes to all events and maintains a queryable audit log (memory or SQLite).
 
 See [docs/plugins/](docs/plugins/) for more details.

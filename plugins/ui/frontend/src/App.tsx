@@ -8,7 +8,10 @@ import {
     Layers,
     Cpu,
     RefreshCw,
-    PlayCircle
+    PlayCircle,
+    Server,
+    Github,
+    BookOpen
 } from 'lucide-react';
 
 /* --- Types --- */
@@ -32,6 +35,13 @@ type Deployment = {
     docker_status?: string;
     compose_project?: string;
     compose_service?: string;
+    current_sha?: string;
+    pending_sha?: string;
+    previous_success_sha?: string;
+    verification?: string;
+    elapsed?: string;
+    successful_revisions?: Array<{ sha: string; deployed_at: string; verification: string }>;
+    rollback_status?: string;
     compose_files?: string;
     adoption_status?: string;
     execution_status?: string;
@@ -67,6 +77,9 @@ type PluginInfo = {
 const tabPaths: Record<string, string> = {
     system: '/ui/system',
     stacks: '/ui/stacks',
+    agents: '/ui/agents',
+    actions: '/ui/actions',
+    setup: '/ui/setup',
     logs: '/ui/logs',
     plugins: '/ui/plugins',
 };
@@ -116,6 +129,16 @@ function deploymentLabel(dep: Deployment) {
 }
 
 function availableActions(dep: Deployment) {
+    if (dep.source === 'local_deploy') {
+        const actions = ['deploy_latest'];
+        if (dep.last_error) {
+            actions.push('retry_deployment');
+        }
+        if (dep.successful_revisions && dep.successful_revisions.length > 0) {
+            actions.push('rollback_deployment');
+        }
+        return actions;
+    }
     if (dep.managed === false) {
         return [] as string[];
     }
@@ -141,6 +164,12 @@ function actionLabel(action: string) {
             return 'Reconcile';
         case 'refresh_stack_images':
             return 'Pull Images';
+        case 'deploy_latest':
+            return 'Deploy latest';
+        case 'retry_deployment':
+            return 'Retry';
+        case 'rollback_deployment':
+            return 'Roll back';
         default:
             return action;
     }
@@ -167,7 +196,7 @@ function groupDeployments(deployments: Deployment[]) {
         });
     });
 
-    const kindOrder: Record<string, number> = { 'git-ops': 0, compose: 1, docker: 2 };
+    const kindOrder: Record<string, number> = { 'local_deploy': 0, github_actions: 1, 'git-ops': 2, compose: 3, docker: 4 };
     return Array.from(groups.values()).sort((a, b) => {
         const kindDifference = (kindOrder[a.kind] ?? 99) - (kindOrder[b.kind] ?? 99);
         return kindDifference || a.name.localeCompare(b.name);
@@ -176,6 +205,8 @@ function groupDeployments(deployments: Deployment[]) {
 
 function groupKindLabel(kind: string) {
     switch (kind) {
+        case 'local_deploy':
+            return 'Commit-pinned local deployment';
         case 'git-ops':
             return 'Managed GitOps';
         case 'compose':
@@ -202,8 +233,12 @@ function App() {
     const [systemInfo, setSystemInfo] = useState<any>(null);
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+    const [agents, setAgents] = useState<any[]>([]);
+    const [actionRepositories, setActionRepositories] = useState<any[]>([]);
+    const [setupInfo, setSetupInfo] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [pendingActions, setPendingActions] = useState<Record<string, string>>({});
+    const [rollbackTargets, setRollbackTargets] = useState<Record<string, string>>({});
     const [flashMessage, setFlashMessage] = useState<string>('');
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const [adoptionHelpGroups, setAdoptionHelpGroups] = useState<Record<string, boolean>>({});
@@ -218,6 +253,14 @@ function App() {
 
     useEffect(() => {
         fetchData();
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab !== 'stacks') {
+            return;
+        }
+        const timer = globalThis.setInterval(fetchData, 2000);
+        return () => globalThis.clearInterval(timer);
     }, [activeTab]);
 
     useEffect(() => {
@@ -242,6 +285,18 @@ function App() {
                 if (activeTab === 'logs' && data && data.length > 0 && !selectedLogStack) {
                     setSelectedLogStack(data[0]);
                 }
+            } else if (activeTab === 'agents') {
+                const [agentResponse, repositoryResponse] = await Promise.all([
+                    fetch('/api/ui/fleet/agents'), fetch('/api/ui/github-actions/workflows'),
+                ]);
+                setAgents(await agentResponse.json() || []);
+                setActionRepositories(await repositoryResponse.json() || []);
+            } else if (activeTab === 'actions') {
+                const res = await fetch('/api/ui/github-actions/workflows');
+                setActionRepositories(await res.json() || []);
+            } else if (activeTab === 'setup') {
+                const res = await fetch('/api/ui/github-actions/setup');
+                setSetupInfo(await res.json());
             } else if (activeTab === 'plugins') {
                 const res = await fetch('/api/plugins?include_config=true');
                 setPlugins(await res.json());
@@ -252,15 +307,58 @@ function App() {
         setLoading(false);
     };
 
-    const handleStackAction = async (dep: Deployment, action: string) => {
+    const handleCapabilityAction = async (endpoint: string, action: string, params: Record<string, any>) => {
+        setFlashMessage('');
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, params }),
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            setFlashMessage(text || `${action} failed`);
+            return null;
+        }
+        const result = text ? JSON.parse(text) : {};
+        setFlashMessage(`${action.replaceAll('_', ' ')} accepted`);
+        await fetchData();
+        return result;
+    };
+
+    const handleStackAction = async (dep: Deployment, action: string, targetSHA = '') => {
         const key = dep.id || `${dep.owner}-${dep.repo}`;
         setPendingActions(prev => ({ ...prev, [key]: action }));
         setFlashMessage('');
         try {
+            let confirmed = false;
+            if (action === 'rollback_deployment') {
+                if (!targetSHA) {
+                    throw new Error('Select a retained successful revision first');
+                }
+                const params = new URLSearchParams({ owner: dep.owner, repo: dep.repo, sha: targetSHA });
+                const summaryResponse = await fetch(`/api/ui/local-deploy/rollback-summary?${params.toString()}`);
+                if (!summaryResponse.ok) {
+                    throw new Error(await summaryResponse.text());
+                }
+                const summary = await summaryResponse.json();
+                const commands = Array.isArray(summary.commands) ? summary.commands.join('\n') : 'Unavailable';
+                confirmed = globalThis.confirm(
+                    `Roll back ${deploymentLabel(dep)}?\n\nCurrent: ${summary.current_sha || 'none'}\nTarget: ${summary.target_sha}\n\nRollback commands:\n${commands}`
+                );
+                if (!confirmed) {
+                    return;
+                }
+            }
             const res = await fetch('/api/ui/stacks/action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ owner: dep.owner, repo: dep.repo, action }),
+                body: JSON.stringify({
+                    owner: dep.owner,
+                    repo: dep.repo,
+                    action,
+                    sha: targetSHA || undefined,
+                    confirmed,
+                }),
             });
             if (!res.ok) {
                 const text = await res.text();
@@ -332,6 +430,9 @@ function App() {
     const navItems = [
         { id: 'system', label: 'System Info', icon: <Activity size={18} /> },
         { id: 'stacks', label: 'Deployments', icon: <Layers size={18} /> },
+        { id: 'agents', label: 'Agents & Runners', icon: <Server size={18} /> },
+        { id: 'actions', label: 'GitHub Actions', icon: <Github size={18} /> },
+        { id: 'setup', label: 'Runner Setup', icon: <BookOpen size={18} /> },
         { id: 'logs', label: 'Live Logs', icon: <Terminal size={18} /> },
         { id: 'plugins', label: 'Plugin Config', icon: <Settings size={18} /> },
     ];
@@ -496,6 +597,14 @@ function App() {
                                                                     <td>{dep.owner || <span className="text-muted">docker</span>}</td>
                                                                     <td>
                                                                         <strong>{deploymentLabel(dep)}</strong>
+                                                                        {dep.source === 'local_deploy' ? (
+                                                                            <div className="revision-details text-muted">
+                                                                                <div>current: {dep.current_sha?.slice(0, 12) || 'none'}</div>
+                                                                                <div>pending: {dep.pending_sha?.slice(0, 12) || 'none'}</div>
+                                                                                <div>previous: {dep.previous_success_sha?.slice(0, 12) || 'none'}</div>
+                                                                                <div>{dep.verification || 'pending'}{dep.elapsed ? ` · ${dep.elapsed}` : ''}</div>
+                                                                            </div>
+                                                                        ) : null}
                                                                         {dep.compose_service ? (
                                                                             <div className="status-detail text-muted">service: {dep.compose_service}</div>
                                                                         ) : null}
@@ -512,14 +621,32 @@ function App() {
                                                                     </td>
                                                                     <td>
                                                                         <div className="action-group">
+                                                                            {dep.source === 'local_deploy' && dep.successful_revisions?.length ? (
+                                                                                <select
+                                                                                    className="rollback-select"
+                                                                                    aria-label={`Rollback target for ${deploymentLabel(dep)}`}
+                                                                                    value={rollbackTargets[dep.id || `${dep.owner}-${dep.repo}`] || dep.successful_revisions.find(revision => revision.sha !== dep.current_sha)?.sha || dep.successful_revisions[0].sha}
+                                                                                    onChange={(event) => setRollbackTargets(current => ({
+                                                                                        ...current,
+                                                                                        [dep.id || `${dep.owner}-${dep.repo}`]: event.target.value,
+                                                                                    }))}
+                                                                                >
+                                                                                    {dep.successful_revisions.map(revision => (
+                                                                                        <option key={revision.sha} value={revision.sha}>
+                                                                                            {revision.sha.slice(0, 12)} · {revision.verification}
+                                                                                        </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            ) : null}
                                                                             {availableActions(dep).map(action => {
                                                                                 const key = dep.id || `${dep.owner}-${dep.repo}`;
                                                                                 const pending = pendingActions[key] === action;
+                                                                                const rollbackSHA = rollbackTargets[key] || dep.successful_revisions?.find(revision => revision.sha !== dep.current_sha)?.sha || dep.successful_revisions?.[0]?.sha || '';
                                                                                 return (
                                                                                     <button
                                                                                         key={action}
                                                                                         className={`action-btn ${action}`}
-                                                                                        onClick={() => handleStackAction(dep, action)}
+                                                                                        onClick={() => handleStackAction(dep, action, action === 'rollback_deployment' ? rollbackSHA : '')}
                                                                                         disabled={pending || loading}
                                                                                     >
                                                                                         {pending ? 'Working…' : actionLabel(action)}
@@ -575,6 +702,120 @@ function App() {
                                     logs.map((entry) => <div key={entry.id} className="log-line">{entry.line}</div>)
                                 )}
                             </div>
+                        </div>
+                    )}
+
+                    {/* TAB: Agents & Runners */}
+                    {activeTab === 'agents' && (
+                        <div className="deployment-groups">
+                            <div className="card">
+                                <div className="plugin-header">
+                                    <h3>Fleet agents</h3>
+                                    <button className="action-btn" onClick={async () => {
+                                        const pool = globalThis.prompt('Pool for this one-time enrollment token');
+                                        if (!pool) return;
+                                        const result = await handleCapabilityAction('/api/ui/fleet/action', 'create_enrollment_token', { pool });
+                                        if (result?.token) globalThis.prompt('Copy this token now; it is shown once', result.token);
+                                    }}>Create enrollment token</button>
+                                </div>
+                                {agents.length === 0 ? <div className="empty-state">No enrolled agents.</div> : agents.map(agent => (
+                                    <div className="card" key={agent.id}>
+                                        <div className="plugin-header"><h3>{agent.facts?.node_name || agent.id}</h3><span className={`status-badge ${agent.online ? 'healthy' : 'unhealthy'}`}>{agent.online ? 'ONLINE' : 'OFFLINE'}</span></div>
+                                        <p className="text-muted">Pool {agent.facts?.pool} · {agent.facts?.os}/{agent.facts?.architecture} · last seen {new Date(agent.last_seen).toLocaleString()}</p>
+                                        <div className="caps-list">{agent.facts?.labels?.map((label: string) => <span className="cap-badge" key={label}>{label}</span>)}</div>
+                                        <button className="action-btn" disabled={!agent.online} onClick={async () => {
+                                            const eligible = actionRepositories.map(repo => `${repo.owner}/${repo.repo}`);
+                                            const suggested = eligible[0] || '';
+                                            const target = globalThis.prompt(`Eligible private repository (owner/repo):\n${eligible.join('\n')}`, suggested);
+                                            if (!target) return;
+                                            const [owner, repository, ...extra] = target.split('/');
+                                            if (!owner || !repository || extra.length > 0 || !eligible.some(value => value.toLowerCase() === target.toLowerCase())) {
+                                                setFlashMessage('Select an eligible private topic-matched repository');
+                                                return;
+                                            }
+                                            const name = globalThis.prompt('Runner name', `${agent.facts?.node_name || 'ghops'}-${repository}`);
+                                            if (!name) return;
+                                            const scopeInput = globalThis.prompt('Runner scope: repository or organization', 'repository');
+                                            const scope = scopeInput?.toLowerCase() === 'organization' ? 'organization' : 'repository';
+                                            const group = scope === 'organization' ? (globalThis.prompt('Existing GitHub runner group (optional)', '') || '') : '';
+                                            const groupsInput = globalThis.prompt('Allowed supplementary Linux groups (comma separated)', '') || '';
+                                            await handleCapabilityAction('/api/ui/github-actions/action', 'create_runner', {
+                                                spec: {
+                                                    agent_id: agent.id,
+                                                    name,
+                                                    scope,
+                                                    owner,
+                                                    repository,
+                                                    group,
+                                                    labels: agent.facts?.labels || [],
+                                                    supplementary_groups: groupsInput.split(',').map(value => value.trim()).filter(Boolean),
+                                                    auto_update: true,
+                                                },
+                                            });
+                                        }}>Create runner on this agent</button>
+                                        {(agent.runners || []).map((runner: any) => (
+                                            <div className="config-block" key={runner.id}>
+                                                <strong>{runner.name}</strong> · {runner.scope} · {runner.service} {runner.busy ? '· busy' : ''}
+                                                <div className="action-group">
+                                                    {['start','stop','restart','drain','update','remove'].map(operation => (
+                                                        <button key={operation} className="action-btn" onClick={() => {
+                                                            if (operation === 'remove' && !globalThis.confirm(`Remove runner ${runner.name}?`)) return;
+                                                            handleCapabilityAction('/api/ui/github-actions/action', 'runner_action', { runner_id: runner.id, operation, force: false, busy: runner.busy });
+                                                        }}>{operation}</button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* TAB: GitHub Actions */}
+                    {activeTab === 'actions' && (
+                        <div className="deployment-groups">
+                            {actionRepositories.length === 0 ? <div className="empty-state">No eligible Actions repositories.</div> : actionRepositories.map(repo => (
+                                <section className="deployment-group" key={`${repo.owner}/${repo.repo}`}>
+                                    <h3>{repo.owner}/{repo.repo}</h3>
+                                    {repo.manifest_error ? <div className="flash-message">{repo.manifest_error}</div> : null}
+                                    {(repo.workflows || []).map((workflow: any) => (
+                                        <div className="card" key={workflow.id}>
+                                            <div className="plugin-header"><strong>{workflow.name}</strong><button className="action-btn" onClick={() => {
+                                                const rawInputs = globalThis.prompt('workflow_dispatch inputs as JSON', '{}');
+                                                if (rawInputs === null) return;
+                                                try {
+                                                    const inputs = JSON.parse(rawInputs);
+                                                    handleCapabilityAction('/api/ui/github-actions/action', 'dispatch_workflow', { owner: repo.owner, repo: repo.repo, workflow: workflow.id.toString(), inputs });
+                                                } catch {
+                                                    setFlashMessage('Workflow inputs must be a JSON object');
+                                                }
+                                            }}>Dispatch default branch</button></div>
+                                            {(repo.runs || []).filter((run: any) => run.workflow_id === workflow.id).slice(0, 5).map((run: any) => (
+                                                <div className="config-block" key={run.id}>
+                                                    <span className={`status-badge ${run.conclusion || run.status}`}>{run.conclusion || run.status}</span> {run.head_branch} · {run.head_sha?.slice(0, 12)} · attempt {run.run_attempt}
+                                                    <div className="action-group">
+                                                        {(run.status === 'queued' || run.status === 'in_progress') ? <button className="action-btn" onClick={() => globalThis.confirm(`Cancel run ${run.id}?`) && handleCapabilityAction('/api/ui/github-actions/action', 'cancel_workflow', { owner: repo.owner, repo: repo.repo, run_id: run.id.toString() })}>Cancel</button> : null}
+                                                        <button className="action-btn" onClick={() => handleCapabilityAction('/api/ui/github-actions/action', 'rerun_workflow', { owner: repo.owner, repo: repo.repo, run_id: run.id.toString() })}>Rerun</button>
+                                                        <a href={run.html_url} target="_blank" rel="noreferrer">Open in GitHub</a>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </section>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* TAB: Runner Setup */}
+                    {activeTab === 'setup' && (
+                        <div className="card grid-card">
+                            <h3>Runner fleet readiness</h3>
+                            <p className="text-muted">Reusable GitHub credentials remain on this controller. Agents receive only task-scoped registration or removal tokens over mTLS.</p>
+                            <pre className="code-block">{JSON.stringify(setupInfo, null, 2)}</pre>
+                            <p>Configure controller connections, TLS, pools, and operator groups in <code>config.yaml</code>, then create a one-time enrollment token from Agents &amp; Runners.</p>
+                            <p>Repositories opt in with their configured GitHub topic and <code>.ghops/actions.yaml</code>. Persistent runners must only execute trusted private-repository workflows.</p>
                         </div>
                     )}
 

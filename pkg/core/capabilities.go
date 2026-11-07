@@ -40,4 +40,26 @@ const (
 	CapabilityDisableStack Capability = "disable_stack"
 	// CapabilityRefreshStackImages marks plugins that expose refresh_stack_images through Execute.
 	CapabilityRefreshStackImages Capability = "refresh_stack_images"
+	// CapabilityDeployRevision marks plugins that deploy an exact repository revision.
+	CapabilityDeployRevision Capability = "deploy_revision"
+	// CapabilityRetryDeployment marks plugins that retry a failed exact revision.
+	CapabilityRetryDeployment Capability = "retry_deployment"
+	// CapabilityDeployLatest marks plugins that resolve and deploy the latest default-branch revision.
+	CapabilityDeployLatest Capability = "deploy_latest"
+	// CapabilityRollbackDeployment marks plugins that roll back to a retained successful revision.
+	CapabilityRollbackDeployment Capability = "rollback_deployment"
+	// CapabilityListAgents exposes centrally enrolled fleet agents.
+	CapabilityListAgents Capability = "list_agents"
+	// CapabilityManageAgents creates enrollment credentials and revokes agents.
+	CapabilityManageAgents Capability = "manage_agents"
+	// CapabilityListRunners exposes GitHub Actions runner inventory.
+	CapabilityListRunners Capability = "list_runners"
+	// CapabilityManageRunners manages persistent self-hosted runner lifecycle.
+	CapabilityManageRunners Capability = "manage_runners"
+	// CapabilityListActionWorkflows exposes eligible workflows and workflow runs.
+	CapabilityListActionWorkflows Capability = "list_action_workflows"
+	// CapabilityManageActionRuns dispatches, cancels, and reruns workflows.
+	CapabilityManageActionRuns Capability = "manage_action_runs"
+	// CapabilityActionsSetup exposes redacted readiness and setup information.
+	CapabilityActionsSetup Capability = "actions_setup"
 )

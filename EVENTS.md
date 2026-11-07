@@ -6,7 +6,7 @@ Notes:
 
 - `audit` subscribes to `*`, so it receives every event listed here.
 - notifier plugins subscribe to configurable patterns. With default config they
-  subscribe to `notify_*`.
+  subscribe to `notify_*` and normalized `execution` events.
 - the MCP plugin subscribes to `deploy_*`.
 - payload tables describe `InternalEvent.Details` fields, not top-level event
   fields like `Type`, `Source`, `Timestamp`, `Repo`, or `Message`.
@@ -75,7 +75,7 @@ Notes:
 
 ## execution
 **Publisher:** `reconciler`  
-**Subscribers:** `audit`  
+**Subscribers:** `audit`, `notifier_discord`, `notifier_pushover`, `notifier_webhook`
 **Description:** Reports stack execution lifecycle updates across request, running, success, and failure transitions.
 
 | Field | Type | Required | Description |
@@ -91,6 +91,33 @@ Notes:
 | `node_id` | `string` | No | Node that handled the execution. |
 | `trigger` | `string` | No | Trigger source (`reconcile`, `reconcile_stack`, etc.). |
 | `error` | `string` | No | Error detail on failures. |
+
+## repository_revision_requested and local_deploy_requested
+
+**Publishers:** `webhook_trigger`, then `reconciler`
+**Subscribers:** `reconciler`, then `local_deploy`; `audit` receives both
+**Description:** Preserves a GitHub default-branch push as an exact revision request,
+then routes it after owner/topic and recipe eligibility checks.
+
+Both payloads contain `owner`, `repo`, `ref`, `commit_sha`, `delivery_id`,
+and `trigger`. Periodic reconciliation uses the same routed event without a
+delivery ID, allowing `local_deploy` to deduplicate by owner/repository/SHA.
+
+## local_deploy lifecycle events
+
+**Publisher:** `local_deploy`
+**Subscribers:** `audit` and any notifier configured for `local_deploy_*`
+**Description:** The plugin emits `local_deploy_started`, `local_deploy_phase`,
+`local_deploy_succeeded`, `local_deploy_failed`,
+`local_deploy_superseded`, `local_deploy_rollback_started`,
+`local_deploy_rollback_succeeded`, and `local_deploy_rollback_failed`.
+
+Lifecycle payloads include the execution ID, exact commit SHA, prior successful
+SHA, trigger, duration, current phase, verification and rollback status, and a
+failure classification/error when applicable. The plugin also publishes the
+normalized `execution` event at each transition, using the stages `checkout`,
+`build`, `deploy`, `verify`, and `rollback`, so existing audit and
+notification consumers receive a consistent execution shape.
 
 ## stack_commit_changed
 **Publisher:** `reconciler`  
@@ -323,3 +350,8 @@ Notes:
 | `attempt` | `int` | Yes | Attempt number in the retry cycle. |
 | `retry_delay` | `string` | Yes | Delay before the attempt runs. |
 | `message` | `string` | No | Outcome or detail message. |
+## Fleet and GitHub Actions events
+
+The fleet and Actions plugins publish `fleet_agent_enrolled`, `fleet_agent_revoked`, `fleet_agent_heartbeat`, `fleet_task_requested`, `fleet_task_completed`, `github_workflow_run`, `github_workflow_job`, `github_actions_manifest_invalid`, and `github_actions_runner_requested`.
+
+Manifest-declared workflow runs also publish the normalized `execution` event with stage `actions`, execution ID `gha:<run-id>:<attempt>`, exact commit SHA, workflow path, conclusion, trigger, and GitHub URL. Audit and notification plugins consume these through their existing wildcard/execution subscriptions.

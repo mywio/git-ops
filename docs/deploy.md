@@ -37,7 +37,8 @@ core:
   plugins: ["reconciler", "ui", "discord"]
   target_dir: "/opt/stacks"
   interval: "5m"
-  plugins_dir: "./bin/plugins"
+  # For a source build run from the repository root:
+  # plugins_dir: "./bin/plugins"
 
 env_forwarder:
   keys: ["SECRET_API_KEY", "DB_PASSWORD"]
@@ -56,6 +57,10 @@ google_secret_manager:
 ```
 
 Notes:
+- YAML values override environment variables. In the official container, omit
+  `core.plugins_dir` to use the image's `PLUGINS_DIR=/app/plugins`, or explicitly
+  set `core.plugins_dir: "/app/plugins"`. Relative paths such as `./plugins`
+  resolve under `/var/lib/git-ops`, where the image does not store plugins.
 - `env_forwarder` reads environment variables from the host, then snapshots the
   allowlisted values to `TARGET_DIR/.git-ops/env_forwarder_snapshot.json` so
   restarts can reuse them if the next process starts without the original env.
@@ -64,6 +69,11 @@ Notes:
 - `file_forwarder` reads allowlisted host files and provides temp file paths to
   docker compose via environment variables.
 - `google_secret_manager` requires Google ADC credentials.
+
+For commit-pinned repository builds, enable the host-only `local_deploy` plugin
+under systemd. It intentionally refuses container execution and requires the
+service account to have Git/submodule credentials, Docker access, and the build
+toolchain named by each recipe. See [the local-deploy guide](../plugins/local_deploy/README.md).
 
 ## Run
 ```bash

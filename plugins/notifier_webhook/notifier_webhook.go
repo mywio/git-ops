@@ -45,7 +45,7 @@ func (p *WebhookPlugin) Init(ctx context.Context, logger *slog.Logger, registry 
 	p.logger.Info("Webhook Plugin Initialized", "url", p.url)
 	if registry != nil {
 		if !subscribeProvided {
-			subscribePatterns = []string{"notify_*"}
+			subscribePatterns = []string{"notify_*", string(core.EventTypeExecution)}
 		}
 		p.subscriptions = append([]string(nil), subscribePatterns...)
 		for _, pattern := range subscribePatterns {

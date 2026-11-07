@@ -48,8 +48,8 @@ func TestDiscordNotifierDefaultsToNotifySubscriptions(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, notifier.enabled)
-	assert.Equal(t, []string{"notify_*"}, notifier.subscriptions)
-	assert.Equal(t, []string{"notify_*"}, registry.subscribers)
+	assert.Equal(t, []string{"notify_*", "execution"}, notifier.subscriptions)
+	assert.Equal(t, []string{"notify_*", "execution"}, registry.subscribers)
 }
 
 func TestDiscordNotifierSendsEmbedPayload(t *testing.T) {

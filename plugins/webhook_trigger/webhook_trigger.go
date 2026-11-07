@@ -17,22 +17,28 @@ import (
 )
 
 type WebhookTriggerPlugin struct {
-	port         string
-	token        string
-	rateLimit    time.Duration
-	logger       *slog.Logger
-	registry     core.PluginRegistry
-	mux          *http.ServeMux
-	server       *http.Server
-	now          func() time.Time
-	rateLimitMu  sync.Mutex
-	lastAccepted time.Time
+	port          string
+	token         string
+	githubSecret  string
+	githubSecrets []string
+	deliveryMu    sync.Mutex
+	deliveries    map[string]struct{}
+	deliveryFIFO  []string
+	rateLimit     time.Duration
+	logger        *slog.Logger
+	registry      core.PluginRegistry
+	mux           *http.ServeMux
+	server        *http.Server
+	now           func() time.Time
+	rateLimitMu   sync.Mutex
+	lastAccepted  time.Time
 }
 
 type webhookTriggerConfig struct {
-	Port      string `yaml:"port"`
-	Token     string `yaml:"token"`
-	RateLimit string `yaml:"rate_limit"`
+	Port         string `yaml:"port"`
+	Token        string `yaml:"token"`
+	GitHubSecret string `yaml:"github_secret"`
+	RateLimit    string `yaml:"rate_limit"`
 }
 
 func (p *WebhookTriggerPlugin) Name() string {
@@ -42,6 +48,7 @@ func (p *WebhookTriggerPlugin) Name() string {
 func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, registry core.PluginRegistry) error {
 	p.logger = logger
 	p.registry = registry
+	p.deliveries = make(map[string]struct{})
 	if p.now == nil {
 		p.now = time.Now
 	}
@@ -66,11 +73,26 @@ func (p *WebhookTriggerPlugin) Init(ctx context.Context, logger *slog.Logger, re
 		}); err != nil {
 			return fmt.Errorf("register event type webhook_received: %w", err)
 		}
+		if err := registry.RegisterEventType(core.EventTypeDesc{
+			Name:        core.EventTypeRepositoryRevisionRequested,
+			Description: "An exact default-branch repository revision was requested",
+			PayloadSpec: map[string]core.PayloadField{
+				"owner":       {Type: "string", Description: "Repository owner", Required: true},
+				"repo":        {Type: "string", Description: "Repository name", Required: true},
+				"ref":         {Type: "string", Description: "Git ref", Required: true},
+				"commit_sha":  {Type: "string", Description: "Exact commit SHA", Required: true},
+				"delivery_id": {Type: "string", Description: "GitHub delivery identifier", Required: true},
+				"trigger":     {Type: "string", Description: "Trigger source", Required: true},
+			},
+		}); err != nil {
+			return fmt.Errorf("register event type repository_revision_requested: %w", err)
+		}
 		p.mux = registry.GetMuxServer()
 	} else {
 		p.mux = http.NewServeMux()
 	}
 	p.mux.HandleFunc("/reconcile", p.handleReconcile)
+	p.mux.HandleFunc("/webhooks/github", p.handleGitHub)
 
 	return nil
 }
@@ -92,6 +114,22 @@ func (p *WebhookTriggerPlugin) loadConfig(ctx context.Context, registry core.Plu
 	}
 	p.port = wcfg.Port
 	p.token = wcfg.Token
+	p.githubSecret = wcfg.GitHubSecret
+	p.githubSecrets = []string{strings.TrimSpace(wcfg.GitHubSecret)}
+	if actionsSection, exists := registry.GetConfig()["github_actions"]; exists {
+		var actions struct {
+			Connections []struct {
+				WebhookSecretFile string `yaml:"webhook_secret_file"`
+			} `yaml:"connections"`
+		}
+		if core.DecodeConfigSection(actionsSection, &actions) == nil {
+			for _, connection := range actions.Connections {
+				if data, readErr := os.ReadFile(connection.WebhookSecretFile); readErr == nil {
+					p.githubSecrets = append(p.githubSecrets, strings.TrimSpace(string(data)))
+				}
+			}
+		}
+	}
 	if wcfg.RateLimit == "" {
 		return nil
 	}
@@ -221,12 +259,14 @@ func (p *WebhookTriggerPlugin) checkRateLimit() (bool, time.Duration) {
 var Plugin core.Plugin = &WebhookTriggerPlugin{}
 
 type webhookTriggerConfigView struct {
-	Port      string      `json:"port"`
-	Token     core.Secret `json:"token"`
-	Secured   bool        `json:"secured"`
-	Enabled   bool        `json:"enabled"`
-	RateLimit string      `json:"rate_limit"`
-	Throttled bool        `json:"throttled"`
+	Port          string      `json:"port"`
+	Token         core.Secret `json:"token"`
+	Secured       bool        `json:"secured"`
+	GitHubSecret  core.Secret `json:"github_secret"`
+	GitHubSecured bool        `json:"github_secured"`
+	Enabled       bool        `json:"enabled"`
+	RateLimit     string      `json:"rate_limit"`
+	Throttled     bool        `json:"throttled"`
 }
 
 func (p *WebhookTriggerPlugin) Config() any {
@@ -235,12 +275,14 @@ func (p *WebhookTriggerPlugin) Config() any {
 		rateLimit = p.rateLimit.String()
 	}
 	return webhookTriggerConfigView{
-		Port:      p.port,
-		Token:     core.NewSecret(p.token),
-		Secured:   p.token != "",
-		Enabled:   p.port != "",
-		RateLimit: rateLimit,
-		Throttled: p.rateLimit > 0,
+		Port:          p.port,
+		Token:         core.NewSecret(p.token),
+		Secured:       p.token != "",
+		GitHubSecret:  core.NewSecret(p.githubSecret),
+		GitHubSecured: p.githubSecret != "",
+		Enabled:       p.port != "",
+		RateLimit:     rateLimit,
+		Throttled:     p.rateLimit > 0,
 	}
 }
 

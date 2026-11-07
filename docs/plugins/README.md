@@ -5,6 +5,9 @@ Each plugin is a shared object (`.so`) file loaded at runtime.
 
 Per-plugin docs live with their source. Start here:
 
+- [Fleet Controller](../../plugins/fleet_controller/README.md)
+- [GitHub Actions](../../plugins/github_actions/README.md)
+- [Local Deploy](../../plugins/local_deploy/README.md)
 - [Example Plugin](../../plugins/example/README.md)
 - [Reconciler](../../plugins/reconciler/README.md)
 - [Google Secret Manager](../../plugins/google_secret_manager/README.md)

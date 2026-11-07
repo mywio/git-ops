@@ -389,6 +389,7 @@ func (r *Reconciler) registerEvents(registry core.PluginRegistry) error {
 	registry.Subscribe("stack_restart_requested", r.handleStackControlEvent("restart_stack"))
 	registry.Subscribe("stack_disable_requested", r.handleStackControlEvent("disable_stack"))
 	registry.Subscribe("stack_enable_requested", r.handleStackControlEvent("enable_stack"))
+	registry.Subscribe(string(core.EventTypeRepositoryRevisionRequested), r.handleRepositoryRevisionRequested)
 	return nil
 }
 
@@ -1933,6 +1934,24 @@ func (r *Reconciler) deployRepo(ctx context.Context, fullName string, repo *gith
 
 func (r *Reconciler) deployRepoWithExecution(ctx context.Context, fullName string, repo *github.Repository, forceType string) {
 	logger := r.logger.With("full_name", fullName)
+
+	commitSHA, err := fetchRepoDefaultBranchSHA(ctx, r.client, repo)
+	if err != nil {
+		logger.Error("Failed to resolve repository commit sha", "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageFetch, err)
+		return
+	}
+	routed, err := r.routeRecipeRevision(ctx, repo, commitSHA, "periodic_reconcile")
+	if err != nil {
+		logger.Error("Failed to inspect local deployment recipe", "sha", commitSHA, "error", err)
+		r.failExecution(ctx, fullName, core.ExecutionStageFetch, err)
+		return
+	}
+	if routed {
+		logger.Info("Repository uses local deployment recipe; skipping legacy Compose reconciliation", "sha", commitSHA)
+		r.succeedExecution(ctx, fullName)
+		return
+	}
 
 	spec, ok := r.fetchComposeSpec(ctx, fullName, repo, logger)
 	if !ok {

@@ -62,7 +62,7 @@ func (n *DiscordNotifier) Init(ctx context.Context, logger *slog.Logger, registr
 	n.logger.InfoContext(ctx, "Discord notifier initialized")
 	if registry != nil {
 		if !subscribeProvided {
-			subscribePatterns = []string{"notify_*"}
+			subscribePatterns = []string{"notify_*", string(core.EventTypeExecution)}
 		}
 		n.subscriptions = append([]string(nil), subscribePatterns...)
 		for _, pattern := range subscribePatterns {

@@ -594,3 +594,30 @@ body {
   overflow-x: auto;
   color: #fbbf24;
 }
+
+.revision-details {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.rollback-select {
+  max-width: 190px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.action-btn.rollback_deployment {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+}
+
+.action-btn.rollback_deployment:hover {
+  background: rgba(239, 68, 68, 0.18);
+}

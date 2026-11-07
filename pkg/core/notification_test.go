@@ -92,9 +92,9 @@ func TestNewNotificationPayloadForGenericEvent(t *testing.T) {
 
 func TestNotificationPayloadOmitsZeroTimestampWhenMarshaled(t *testing.T) {
 	payload := NewNotificationPayload(InternalEvent{
-		Type:   "notify_secret_conflict",
-		Source: "reconciler",
-		Repo:   "api",
+		Type:    "notify_secret_conflict",
+		Source:  "reconciler",
+		Repo:    "api",
 		Message: "Secret DATABASE_URL already provided by env; skipping vault",
 		Details: map[string]any{
 			"key":    "DATABASE_URL",

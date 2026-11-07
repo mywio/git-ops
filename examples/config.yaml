@@ -7,7 +7,9 @@ core:
   target_dir: "./stacks"
   interval: "5m"
   dry_run: false
-  plugins_dir: "./plugins"
+  # Omit plugins_dir to use PLUGINS_DIR (/app/plugins in the official image).
+  # For a source build run from the repository root, set:
+  # plugins_dir: "./bin/plugins"
   http_addr: "127.0.0.1:8080"
 
 pushover:
@@ -15,15 +17,70 @@ pushover:
   user: "push_user"
   subscribe:
     - "notify_*"
+    - "execution"
 
 webhook:
   url: "https://example.com/notify"
   subscribe:
     - "deploy_*"
+    - "execution"
 
 webhook_trigger:
   port: "8082"
   token: "webhook_token"
+  github_secret: "github_webhook_secret"
+
+# Host/systemd only. The official GHOps container does not support local_deploy.
+local_deploy:
+  enabled: false
+  require_systemd: true
+  state_dir: "/var/lib/git-ops/local-deploy/state"
+  cache_dir: "/var/lib/git-ops/local-deploy/cache"
+  log_dir: "/var/log/git-ops/local-deploy"
+  global_concurrency: 1
+  checkout_retention: 5
+  execution_retention: 100
+  successful_retention: 20
+  max_log_size: "10MiB"
+  allowed_environment: ["PATH"]
+
+fleet_controller:
+  enabled: false
+  listen_addr: ":8443"
+  public_url: "https://ghops.example.com:8443"
+  tls_cert_file: "/etc/git-ops/tls/server.crt"
+  tls_key_file: "/etc/git-ops/tls/server.key"
+  agent_ca_cert_file: "/etc/git-ops/tls/agent-ca.crt"
+  agent_ca_key_file: "/etc/git-ops/tls/agent-ca.key"
+  state_db: "/var/lib/git-ops/fleet.db"
+  enrollment_token_ttl: "15m"
+  heartbeat_interval: "15s"
+  offline_after: "60s"
+  pools:
+    - name: "server-1"
+      repository_topics: ["homelab-server-1"]
+      runner_labels: ["ghops", "homelab-server-1"]
+
+github_actions:
+  enabled: false
+  state_db: "/var/lib/git-ops/github-actions.db"
+  refresh_interval: "1m"
+  max_log_download: 26214400
+  connections:
+    - name: "my-org"
+      owners: ["my-org"]
+      auth:
+        type: "github_app"
+        app_id: 123
+        installation_id: 456
+        private_key_file: "/etc/git-ops/secrets/github-app.pem"
+      webhook_secret_file: "/etc/git-ops/secrets/github-app-webhook"
+    - name: "personal"
+      owners: ["my-user"]
+      auth:
+        type: "pat"
+        token_env: "GHOPS_GITHUB_PAT_PERSONAL"
+      webhook_secret_file: "/etc/git-ops/secrets/personal-webhook"
 
 mcp:
   api_key: "mcp_token"
@@ -35,6 +92,9 @@ ui:
   # Recommended: verify the browser session directly with OAuth2 Proxy.
   auth_verify_url: "http://oauth2-proxy:4180/oauth2/auth"
   trust_auth_header: false
+  groups_header: "X-Auth-Request-Groups"
+  operator_users: ["alice"]
+  operator_groups: ["ghops-operators"]
 
 compose_refresh:
   enabled: true

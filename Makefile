@@ -4,13 +4,17 @@ PLUGINS_DIR=$(BUILD_DIR)/plugins
 VERSION ?= dev
 GO_LDFLAGS=-ldflags "-X github.com/mywio/git-ops/pkg/core.Version=$(VERSION)"
 
-.PHONY: all build plugins build-plugins ui ui-plugin _check-npm clean
+.PHONY: all build agent plugins build-plugins ui ui-plugin _check-npm clean
 
-all: build plugins
+all: build agent plugins
 
 build:
 	mkdir -p $(BUILD_DIR)
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) main.go
+
+agent:
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 go build $(GO_LDFLAGS) -o $(BUILD_DIR)/git-ops-agent ./cmd/git-ops-agent
 
 plugins: build-plugins ui-plugin
 
@@ -21,14 +25,17 @@ build-plugins:
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/audit.so plugins/audit/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/compose_refresh.so plugins/compose_refresh/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/env_forwarder.so plugins/env_forwarder/main.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/fleet_controller.so plugins/fleet_controller/*.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/github_actions.so plugins/github_actions/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/file_forwarder.so plugins/file_forwarder/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/google_secret_manager.so plugins/google_secret_manager/main.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/image_refresh.so plugins/image_refresh/*.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/local_deploy.so plugins/local_deploy/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/mcp.so plugins/mcp/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/discord.so plugins/notifier_discord/discord.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_pushover.so plugins/notifier_pushover/pushover.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/notifier_webhook.so plugins/notifier_webhook/notifier_webhook.go
-	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/webhook_trigger.go
+	go build -buildmode=plugin -o $(PLUGINS_DIR)/webhook_trigger.so plugins/webhook_trigger/*.go
 	go build -buildmode=plugin -o $(PLUGINS_DIR)/reconciler.so plugins/reconciler/*.go
 
 ui: _check-npm

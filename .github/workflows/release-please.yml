@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -42,16 +44,35 @@ jobs:
         run: |
           make build VERSION=${{ needs.release-please.outputs.tag_name }}
           make plugins
+          make agent VERSION=${{ needs.release-please.outputs.tag_name }}
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X github.com/mywio/git-ops/pkg/core.Version=${{ needs.release-please.outputs.tag_name }}" -o bin/git-ops-agent-linux-arm64 ./cmd/git-ops-agent
 
       - name: Package artifacts
         run: |
           mkdir -p dist/plugins
           cp bin/git-ops dist/
+          cp bin/git-ops-agent dist/git-ops-agent-linux-amd64
+          cp bin/git-ops-agent-linux-arm64 dist/
+          cp scripts/install-agent.sh dist/
+          sha256sum dist/git-ops-agent-linux-amd64 dist/git-ops-agent-linux-arm64 > dist/SHA256SUMS
           cp bin/plugins/*.so dist/plugins/
-          tar -czf dist/git-ops-linux-amd64.tar.gz -C dist .
+          tar -czf /tmp/git-ops-linux-amd64.tar.gz -C dist .
+          mv /tmp/git-ops-linux-amd64.tar.gz dist/
+
+      - name: Attest agent artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/git-ops-agent-linux-amd64
+            dist/git-ops-agent-linux-arm64
+            dist/SHA256SUMS
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: dist/git-ops-linux-amd64.tar.gz
+          files: |
+            dist/git-ops-linux-amd64.tar.gz
+            dist/git-ops-agent-linux-*
+            dist/SHA256SUMS
+            dist/install-agent.sh

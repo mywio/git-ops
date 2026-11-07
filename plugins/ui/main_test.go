@@ -91,7 +91,7 @@ func TestUIPluginAcceptsCustomAuthHeader(t *testing.T) {
 	mgr.SetConfig(map[string]map[string]any{
 		"ui": {
 			"auth_header":       "X-Forwarded-User",
-			"trust_auth_header": true,
+			"trust_auth_header": true, "operator_users": []string{"alice"},
 		},
 	})
 
@@ -114,6 +114,7 @@ func TestUIPluginVerifiesOAuth2ProxySession(t *testing.T) {
 		assert.Equal(t, "session=valid", r.Header.Get("Cookie"))
 		assert.Equal(t, "/ui/system", r.Header.Get("X-Forwarded-Uri"))
 		w.Header().Set("X-Auth-Request-User", "verified-alice")
+		w.Header().Set("X-Auth-Request-Groups", "verified-operators")
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer authServer.Close()
@@ -121,7 +122,7 @@ func TestUIPluginVerifiesOAuth2ProxySession(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	mgr := core.NewModuleManager(logger)
 	mgr.SetConfig(map[string]map[string]any{
-		"ui": {"auth_verify_url": authServer.URL},
+		"ui": {"auth_verify_url": authServer.URL, "operator_groups": []string{"verified-operators"}},
 	})
 
 	plugin := &UIPlugin{}
@@ -130,11 +131,14 @@ func TestUIPluginVerifiesOAuth2ProxySession(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/ui/system", nil)
 	req.Header.Set("Cookie", "session=valid")
 	req.Header.Set("X-Auth-Request-User", "spoofed-mallory")
+	req.Header.Set("X-Auth-Request-Groups", "spoofed-admins")
 	rr := httptest.NewRecorder()
 
 	user, err := plugin.verifyAuthenticatedUser(req)
 	require.NoError(t, err)
 	assert.Equal(t, "verified-alice", user)
+	assert.Equal(t, "verified-operators", req.Header.Get("X-Auth-Request-Groups"))
+	assert.True(t, plugin.isOperator(req, user))
 
 	mgr.GetMuxServer().ServeHTTP(rr, req)
 
@@ -168,7 +172,7 @@ func TestUIPluginExecutesStackActionCapability(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
-	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true, "operator_users": []string{"alice"}}})
 	actionPlugin := &uiActionTestPlugin{capabilities: []core.Capability{core.CapabilityRestartStack}}
 	mgr.Register(actionPlugin)
 
@@ -200,7 +204,7 @@ func TestUIPluginRejectsUnknownStackAction(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
-	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true, "operator_users": []string{"alice"}}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))
@@ -219,7 +223,7 @@ func TestUIPluginRejectsUnknownStackAction(t *testing.T) {
 func TestUIPluginRejectsUnsafeStackPath(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	mgr := core.NewModuleManager(logger)
-	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true, "operator_users": []string{"alice"}}})
 	actionPlugin := &uiActionTestPlugin{capabilities: []core.Capability{core.CapabilityRestartStack}}
 	mgr.Register(actionPlugin)
 
@@ -241,7 +245,7 @@ func TestUIPluginRejectsStackActionWithoutAuth(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
-	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true, "operator_users": []string{"alice"}}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))
@@ -260,7 +264,7 @@ func TestUIPluginRejectsStackActionWrongMethod(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	mgr := core.NewModuleManager(logger)
-	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true}})
+	mgr.SetConfig(map[string]map[string]any{"ui": {"trust_auth_header": true, "operator_users": []string{"alice"}}})
 
 	plugin := &UIPlugin{}
 	require.NoError(t, plugin.Init(ctx, logger, mgr))

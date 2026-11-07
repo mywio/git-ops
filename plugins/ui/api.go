@@ -24,12 +24,17 @@ func (p *UIPlugin) registerRoutes() {
 	if p.mux == nil {
 		return
 	}
-
-	// API Routes (prefix with /api/ui to avoid core conflicts)
 	p.mux.HandleFunc("/api/ui/deployments", p.requireAuth(p.handleDeployments))
 	p.mux.HandleFunc("/api/ui/logs", p.requireAuth(p.handleLogs))
 	p.mux.HandleFunc("/api/ui/system/info", p.requireAuth(p.handleSystemInfo))
-	p.mux.HandleFunc("/api/ui/stacks/action", p.requireAuth(p.handleStackAction))
+	p.mux.HandleFunc("/api/ui/stacks/action", p.requireAuth(p.requireOperator(p.handleStackAction)))
+	p.mux.HandleFunc("/api/ui/local-deploy/rollback-summary", p.requireAuth(p.handleRollbackSummary))
+	p.mux.HandleFunc("/api/ui/fleet/agents", p.requireAuth(p.handleAgents))
+	p.mux.HandleFunc("/api/ui/fleet/action", p.requireAuth(p.requireOperator(p.handleFleetAction)))
+	p.mux.HandleFunc("/api/ui/github-actions/workflows", p.requireAuth(p.handleActionWorkflows))
+	p.mux.HandleFunc("/api/ui/github-actions/runners", p.requireAuth(p.handleActionRunners))
+	p.mux.HandleFunc("/api/ui/github-actions/action", p.requireAuth(p.requireOperator(p.handleGitHubAction)))
+	p.mux.HandleFunc("/api/ui/github-actions/setup", p.requireAuth(p.handleActionsSetup))
 	p.mux.HandleFunc("/", p.requireAuth(p.handleRootRedirect))
 	p.mux.HandleFunc("/ui", p.requireAuth(p.handleUIRootRedirect))
 	p.mux.HandleFunc("/ui/", p.requireAuth(p.handleFrontend))
@@ -146,9 +151,11 @@ func (p *UIPlugin) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 type stackActionRequest struct {
-	Owner  string `json:"owner"`
-	Repo   string `json:"repo"`
-	Action string `json:"action"`
+	Owner     string `json:"owner"`
+	Repo      string `json:"repo"`
+	Action    string `json:"action"`
+	SHA       string `json:"sha,omitempty"`
+	Confirmed bool   `json:"confirmed,omitempty"`
 }
 
 func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +186,14 @@ func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Action == string(core.CapabilityRollbackDeployment) {
+		req.SHA = strings.TrimSpace(req.SHA)
+		if req.SHA == "" || !req.Confirmed {
+			http.Error(w, "rollback requires a target SHA and explicit confirmation", http.StatusBadRequest)
+			return
+		}
+	}
+
 	capability, ok := stackActionCapability(req.Action)
 	if !ok {
 		http.Error(w, "unsupported stack action", http.StatusBadRequest)
@@ -194,6 +209,9 @@ func (p *UIPlugin) handleStackAction(w http.ResponseWriter, r *http.Request) {
 	params := map[string]interface{}{
 		"owner": req.Owner,
 		"repo":  req.Repo,
+	}
+	if strings.TrimSpace(req.SHA) != "" {
+		params["sha"] = strings.TrimSpace(req.SHA)
 	}
 	if user := p.authenticatedUser(r); user != "" {
 		params["requested_by"] = user
@@ -230,6 +248,12 @@ func stackActionCapability(action string) (core.Capability, bool) {
 		return core.CapabilityReconcileStack, true
 	case string(core.CapabilityRefreshStackImages):
 		return core.CapabilityRefreshStackImages, true
+	case string(core.CapabilityRetryDeployment):
+		return core.CapabilityRetryDeployment, true
+	case string(core.CapabilityDeployLatest):
+		return core.CapabilityDeployLatest, true
+	case string(core.CapabilityRollbackDeployment):
+		return core.CapabilityRollbackDeployment, true
 	default:
 		return "", false
 	}
@@ -302,7 +326,7 @@ func (p *UIPlugin) verifyWithAuthEndpoint(r *http.Request, verifyURL string) (st
 	if err != nil {
 		return "", fmt.Errorf("verify session with auth endpoint: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return "", fmt.Errorf("auth endpoint returned %s", resp.Status)
@@ -310,6 +334,12 @@ func (p *UIPlugin) verifyWithAuthEndpoint(r *http.Request, verifyURL string) (st
 	user := strings.TrimSpace(resp.Header.Get(p.cfg.AuthHeader))
 	if user == "" {
 		return "", fmt.Errorf("auth endpoint response missing %s", p.cfg.AuthHeader)
+	}
+	// Never trust a browser-supplied group header in verification mode. Replace
+	// it with the value asserted by the authentication endpoint.
+	r.Header.Del(p.cfg.GroupsHeader)
+	if groups := strings.TrimSpace(resp.Header.Get(p.cfg.GroupsHeader)); groups != "" {
+		r.Header.Set(p.cfg.GroupsHeader, groups)
 	}
 	return user, nil
 }

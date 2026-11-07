@@ -11,11 +11,11 @@ const (
 	// ExecutionStatusRequested indicates an execution has been queued but not yet running.
 	ExecutionStatusRequested ExecutionStatus = "requested"
 	// ExecutionStatusRunning indicates an execution is currently in progress.
-	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusRunning ExecutionStatus = "running"
 	// ExecutionStatusSucceeded indicates an execution completed successfully.
 	ExecutionStatusSucceeded ExecutionStatus = "succeeded"
 	// ExecutionStatusFailed indicates an execution ended with an error.
-	ExecutionStatusFailed    ExecutionStatus = "failed"
+	ExecutionStatusFailed ExecutionStatus = "failed"
 	// ExecutionStatusCancelled indicates an execution was cancelled before completion.
 	ExecutionStatusCancelled ExecutionStatus = "cancelled"
 )
@@ -36,6 +36,18 @@ const (
 	ExecutionStageComposeUp ExecutionStage = "compose_up"
 	// ExecutionStageComposeDown is the phase that tears a stack down via compose down.
 	ExecutionStageComposeDown ExecutionStage = "compose_down"
+	// ExecutionStageCheckout prepares an isolated checkout at the exact requested revision.
+	ExecutionStageCheckout ExecutionStage = "checkout"
+	// ExecutionStageBuild runs repository-defined build commands.
+	ExecutionStageBuild ExecutionStage = "build"
+	// ExecutionStageDeploy runs repository-defined deploy commands.
+	ExecutionStageDeploy ExecutionStage = "deploy"
+	// ExecutionStageVerify runs repository verification and health checks.
+	ExecutionStageVerify ExecutionStage = "verify"
+	// ExecutionStageRollback restores a previously successful revision.
+	ExecutionStageRollback ExecutionStage = "rollback"
+	// ExecutionStageActions tracks a repository-owned GitHub Actions deployment workflow.
+	ExecutionStageActions ExecutionStage = "actions"
 	// ExecutionStageComplete is the terminal success stage for an execution.
 	ExecutionStageComplete ExecutionStage = "complete"
 )

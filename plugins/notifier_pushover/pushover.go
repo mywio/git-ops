@@ -48,7 +48,7 @@ func (n *PushoverNotifier) Init(ctx context.Context, logger *slog.Logger, regist
 
 	if registry != nil {
 		if !subscribeProvided {
-			subscribePatterns = []string{"notify_*"}
+			subscribePatterns = []string{"notify_*", string(core.EventTypeExecution)}
 		}
 		n.subscriptions = append([]string(nil), subscribePatterns...)
 		for _, pattern := range subscribePatterns {
