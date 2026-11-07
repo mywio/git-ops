@@ -1,7 +1,7 @@
 # Build stage
-FROM node:20.19.0-bookworm-slim AS node
+FROM node:22-bookworm-slim AS node
 
-FROM golang:1.24 AS builder
+FROM golang:1.27.3-bookworm AS builder
 WORKDIR /app
 
 COPY --from=node /usr/local/ /usr/local/

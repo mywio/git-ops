@@ -410,7 +410,7 @@ func (m *ModuleManager) loadPluginFile(path string) (Plugin, error) {
 }
 
 func pluginFromValue(val reflect.Value) (Plugin, bool) {
-	for val.IsValid() && val.Kind() == reflect.Ptr {
+	for val.IsValid() && val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return nil, false
 		}

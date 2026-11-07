@@ -128,11 +128,11 @@ func terminateProcessGroup(pid int, wait <-chan error) {
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
-	case <-wait:
+	case <-wait: //nolint:errcheck // The caller returns the context cancellation error.
 		return
 	case <-timer.C:
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-wait
+		<-wait //nolint:errcheck // A nonzero exit is expected after terminating the process group.
 	}
 }
 

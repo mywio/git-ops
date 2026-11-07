@@ -73,10 +73,10 @@ name: for example, the Discord plugin is selected with `discord`.
 
 ### Build from source
 
-Building from source requires Linux, Go 1.24+, and for the UI plugin Node.js 20.19+.
+Building from source requires Linux, Go 1.27.3+, and for the UI plugin Node.js 20.19+.
 
 #### Prerequisites
-- Go 1.24+
+- Go 1.27.3+
 - Docker & Docker Compose
 
 #### Build

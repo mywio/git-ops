@@ -4,7 +4,7 @@ This guide covers building and running `git-ops` with plugins.
 
 ## Prerequisites
 - Linux (Go plugins are not supported on Windows)
-- Go 1.24+
+- Go 1.27.3+
 - Docker + Docker Compose
 
 ## Build
