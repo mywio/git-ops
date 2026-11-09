@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/mywio/git-ops/compare/v2.0.0...v2.0.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **release:** upload artifacts before publishing immutable releases ([#12](https://github.com/mywio/git-ops/issues/12)) ([14355a1](https://github.com/mywio/git-ops/commit/14355a14fb8cf63095bff30ff019f6421cda1ded))
+
 ## [2.0.0](https://github.com/mywio/git-ops/compare/v1.0.0...v2.0.0) (2026-11-07)
 
 
