@@ -40,8 +40,10 @@ go test -cover ./...
 
 Release Please opens a version and changelog PR after conventional commits such
 as `fix:` land on `master`. Merge that PR to create a draft release and start
-the artifact job. The job checks out the release commit, builds and attests the
-artifacts, uploads all five release assets, and then publishes the release.
+the artifact job. The tag is created with the draft so Release Please can find
+the previous version while assets are building. The job checks out the release
+commit, builds and attests the artifacts, uploads all five release assets, and
+then publishes the release.
 Publication makes the release immutable, so the release stays a draft until
 every build, attestation, and upload step succeeds.
 
