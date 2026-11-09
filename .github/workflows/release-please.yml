@@ -14,6 +14,7 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -28,8 +29,12 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
 
       - uses: actions/setup-go@v5
         with:
@@ -42,10 +47,10 @@ jobs:
 
       - name: Build
         run: |
-          make build VERSION=${{ needs.release-please.outputs.tag_name }}
+          make build VERSION="$RELEASE_TAG"
           make plugins
-          make agent VERSION=${{ needs.release-please.outputs.tag_name }}
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X github.com/mywio/git-ops/pkg/core.Version=${{ needs.release-please.outputs.tag_name }}" -o bin/git-ops-agent-linux-arm64 ./cmd/git-ops-agent
+          make agent VERSION="$RELEASE_TAG"
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X github.com/mywio/git-ops/pkg/core.Version=$RELEASE_TAG" -o bin/git-ops-agent-linux-arm64 ./cmd/git-ops-agent
 
       - name: Package artifacts
         run: |
@@ -71,8 +76,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             dist/git-ops-linux-amd64.tar.gz
-            dist/git-ops-agent-linux-*
+            dist/git-ops-agent-linux-amd64
+            dist/git-ops-agent-linux-arm64
             dist/SHA256SUMS
             dist/install-agent.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

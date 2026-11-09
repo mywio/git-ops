@@ -36,6 +36,22 @@ go test -race ./...
 go test -cover ./...
 ```
 
+## Releases
+
+Release Please opens a version and changelog PR after conventional commits such
+as `fix:` land on `master`. Merge that PR to create a draft release and start
+the artifact job. The job checks out the release commit, builds and attests the
+artifacts, uploads all five release assets, and then publishes the release.
+Publication makes the release immutable, so the release stays a draft until
+every build, attestation, and upload step succeeds.
+
+If an artifact step fails, resolve the failure and retry the failed job while
+the release is still a draft:
+
+```bash
+gh run rerun <run-id> --failed
+```
+
 ## SonarQube
 
 The repository includes a root
